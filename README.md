@@ -1,3 +1,5 @@
+<<finviz-chrome-extension-main.tar>>
+
 Finviz Ticker Exporter (Chrome MV3)
 Extracts tickers from the Finviz Screener (all pages optional) and lets you copy
 as comma-,newline-, or X format separated text, or download a .txt.
