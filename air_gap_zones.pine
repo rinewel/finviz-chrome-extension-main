@@ -1,0 +1,546 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// 基于 Air Gap MTF（原始概念 © Mereep01）重新设计
+
+// 三合一多周期 EMA 指标：
+//   1. 汇聚区：距离很近的 EMA 合并成一个价格区间，强度 = 成员所在周期的权重之和
+//   2. 盈亏比：以价格所在或最近的汇聚区为止损、下一个汇聚区为目标，算出做多 / 做空的 R:R
+//   3. 趋势矩阵：每个周期按均线排列、价格位置、斜率打分，汇总成综合方向
+
+//@version=6
+indicator("Air Gap Zones v6", "AGZ", overlay = true, max_lines_count = 100, max_labels_count = 100, max_boxes_count = 100)
+
+// ─────────────────────────────────────────────
+// 常量 / 类型
+// ─────────────────────────────────────────────
+G_GEN   = "通用设置"
+G_TF1   = "周期 1"
+G_TF2   = "周期 2"
+G_TF3   = "周期 3"
+G_TF4   = "周期 4"
+G_ZONE  = "① 汇聚区"
+G_RR    = "② 盈亏比"
+G_TABLE = "③ 表格 / 趋势矩阵"
+G_ALERT = "警报"
+
+// 单条 EMA
+type Lvl
+    float value
+    int   tfIdx
+    int   len
+    float weight
+
+// 汇聚区：top/bot 为成员 EMA 的真实最高/最低值（未加显示厚度）
+type Zone
+    float      top
+    float      bot
+    float      strength
+    int        count
+    array<Lvl> lvls
+    string     members
+
+// ─────────────────────────────────────────────
+// 通用设置
+// ─────────────────────────────────────────────
+srcInput         = input.source(hl2, "数据源", group = G_GEN)
+drawModeInput    = input.string("当日开盘起", "区域起点", options = ["当日开盘起", "最后K线左移", "贯穿整个图表"], group = G_GEN)
+lineBackInput    = input.int(25, "左移K线数", minval = 1, tooltip = "「最后K线左移」模式的起点；「贯穿」模式下也用作标签文字所在区域的宽度", group = G_GEN)
+labelOffsetInput = input.int(12, "标签右移K线数", minval = 0, group = G_GEN)
+labelSizeInput   = input.string("small", "标签字号", options = ["tiny", "small", "normal", "large", "huge"], group = G_GEN, inline = "lb")
+labelTextInput   = input.color(color.white, "", group = G_GEN, inline = "lb")
+showEmaLinesInput = input.bool(false, "同时显示单条 EMA 细线", group = G_GEN)
+
+// ─────────────────────────────────────────────
+// 周期设置：开关 / 周期 / 颜色 / 权重；4 个 EMA 长度（填 0 关闭该条，请按从短到长填写）
+// ─────────────────────────────────────────────
+LEN_TIP = "填 0 可关闭该条 EMA。排列判断按长度从短到长比较。"
+W_TIP   = "该周期每条 EMA 对汇聚区强度的贡献。周期越大，支撑阻力越强，权重可以越高。"
+
+tf1On  = input.bool(true, "", group = G_TF1, inline = "a")
+tf1    = input.timeframe("30", "周期", group = G_TF1, inline = "a")
+tf1Col = input.color(#ff5252, "", group = G_TF1, inline = "a")
+tf1W   = input.float(1.0, "权重", minval = 0, step = 0.5, group = G_TF1, inline = "a", tooltip = W_TIP)
+tf1L1  = input.int(5,  "EMA", minval = 0, group = G_TF1, inline = "b")
+tf1L2  = input.int(12, "",    minval = 0, group = G_TF1, inline = "b")
+tf1L3  = input.int(34, "",    minval = 0, group = G_TF1, inline = "b")
+tf1L4  = input.int(50, "",    minval = 0, group = G_TF1, inline = "b", tooltip = LEN_TIP)
+
+tf2On  = input.bool(true, "", group = G_TF2, inline = "a")
+tf2    = input.timeframe("60", "周期", group = G_TF2, inline = "a")
+tf2Col = input.color(#00e676, "", group = G_TF2, inline = "a")
+tf2W   = input.float(2.0, "权重", minval = 0, step = 0.5, group = G_TF2, inline = "a", tooltip = W_TIP)
+tf2L1  = input.int(5,  "EMA", minval = 0, group = G_TF2, inline = "b")
+tf2L2  = input.int(12, "",    minval = 0, group = G_TF2, inline = "b")
+tf2L3  = input.int(34, "",    minval = 0, group = G_TF2, inline = "b")
+tf2L4  = input.int(50, "",    minval = 0, group = G_TF2, inline = "b", tooltip = LEN_TIP)
+
+tf3On  = input.bool(true, "", group = G_TF3, inline = "a")
+tf3    = input.timeframe("240", "周期", group = G_TF3, inline = "a")
+tf3Col = input.color(#ffeb3b, "", group = G_TF3, inline = "a")
+tf3W   = input.float(3.0, "权重", minval = 0, step = 0.5, group = G_TF3, inline = "a", tooltip = W_TIP)
+tf3L1  = input.int(5,  "EMA", minval = 0, group = G_TF3, inline = "b")
+tf3L2  = input.int(12, "",    minval = 0, group = G_TF3, inline = "b")
+tf3L3  = input.int(34, "",    minval = 0, group = G_TF3, inline = "b")
+tf3L4  = input.int(50, "",    minval = 0, group = G_TF3, inline = "b", tooltip = LEN_TIP)
+
+tf4On  = input.bool(true, "", group = G_TF4, inline = "a")
+tf4    = input.timeframe("1D", "周期", group = G_TF4, inline = "a")
+tf4Col = input.color(#00e5ff, "", group = G_TF4, inline = "a")
+tf4W   = input.float(4.0, "权重", minval = 0, step = 0.5, group = G_TF4, inline = "a", tooltip = W_TIP)
+tf4L1  = input.int(5,  "EMA", minval = 0, group = G_TF4, inline = "b")
+tf4L2  = input.int(12, "",    minval = 0, group = G_TF4, inline = "b")
+tf4L3  = input.int(34, "",    minval = 0, group = G_TF4, inline = "b")
+tf4L4  = input.int(50, "",    minval = 0, group = G_TF4, inline = "b", tooltip = LEN_TIP)
+
+// ─────────────────────────────────────────────
+// ① 汇聚区
+// ─────────────────────────────────────────────
+mergeAtrInput  = input.float(0.25, "合并距离 (ATR倍)", minval = 0, step = 0.05, tooltip = "一个区间从最低的 EMA 算起，高度不超过此距离的 EMA 都并入同一区间", group = G_ZONE)
+minHeightInput = input.float(0.05, "最小显示厚度 (ATR倍)", minval = 0, step = 0.01, tooltip = "只有一条 EMA 的区间太薄看不见，按此厚度显示", group = G_ZONE)
+atrTfInput     = input.timeframe("1D", "ATR 周期", group = G_ZONE, inline = "atr")
+atrLenInput    = input.int(14, "长度", minval = 1, group = G_ZONE, inline = "atr")
+resColInput    = input.color(#ff5252, "阻力", group = G_ZONE, inline = "zc")
+supColInput    = input.color(#00e676, "支撑", group = G_ZONE, inline = "zc")
+inColInput     = input.color(#9e9e9e, "价格所在", group = G_ZONE, inline = "zc")
+showZoneLblInput = input.bool(true, "显示区间标签（强度 + 成员）", group = G_ZONE)
+
+// ─────────────────────────────────────────────
+// ② 盈亏比
+// ─────────────────────────────────────────────
+stopBufInput  = input.float(0.1, "止损缓冲 (ATR倍)", minval = 0, step = 0.05, tooltip = "止损放在支撑区下沿（做空为阻力区上沿）再外移这个距离", group = G_RR)
+minTgtInput   = input.float(0.0, "目标区最小强度", minval = 0, step = 0.5, tooltip = "强度低于此值的汇聚区不作为目标，继续找下一个", group = G_RR)
+planDrawInput = input.string("按趋势自动", "图上画交易计划", options = ["关闭", "按趋势自动", "做多", "做空"], tooltip = "按趋势自动：趋势矩阵综合偏多画做多计划，偏空画做空计划，震荡不画", group = G_RR)
+tgtColInput   = input.color(#00e676, "目标线", group = G_RR, inline = "pc")
+stopColInput  = input.color(#ff5252, "止损线", group = G_RR, inline = "pc")
+
+// ─────────────────────────────────────────────
+// ③ 表格 / 趋势矩阵
+// ─────────────────────────────────────────────
+showTableInput  = input.bool(true, "显示表格", group = G_TABLE)
+tablePosInput   = input.string(position.top_right, "位置", options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_center, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], group = G_TABLE)
+tableSizeInput  = input.string("small", "字号", options = ["tiny", "small", "normal", "large", "huge"], group = G_TABLE)
+showMatrixInput = input.bool(true, "趋势矩阵", group = G_TABLE, inline = "sec")
+showRRInput     = input.bool(true, "盈亏比", group = G_TABLE, inline = "sec")
+showZoneTblInput = input.bool(true, "汇聚区列表", group = G_TABLE, inline = "sec")
+headerBgInput   = input.color(color.new(#434651, 0), "表头", group = G_TABLE, inline = "hd")
+headerTextInput = input.color(color.white, "", group = G_TABLE, inline = "hd")
+cellBgInput     = input.color(color.new(#131722, 10), "单元格", group = G_TABLE, inline = "cl")
+cellTextInput   = input.color(color.white, "", group = G_TABLE, inline = "cl")
+bullColInput    = input.color(#00c853, "多", group = G_TABLE, inline = "bb")
+bearColInput    = input.color(#d50000, "空", group = G_TABLE, inline = "bb")
+
+// ─────────────────────────────────────────────
+// 警报
+// ─────────────────────────────────────────────
+alertZoneInput    = input.bool(true, "价格进入汇聚区时 alert()", tooltip = "创建警报时选择「任何 alert() 函数调用」", group = G_ALERT, inline = "az")
+alertZoneMinInput = input.float(3.0, "最小强度", minval = 0, step = 0.5, group = G_ALERT, inline = "az")
+
+// ─────────────────────────────────────────────
+// 工具函数
+// ─────────────────────────────────────────────
+toSize(string s) =>
+    switch s
+        "tiny"  => size.tiny
+        "small" => size.small
+        "large" => size.large
+        "huge"  => size.huge
+        => size.normal
+
+// "30" → "30m"，"240" → "4H"，"1D" → "1D"
+formatTf(string tf) =>
+    string t    = tf == "" ? timeframe.period : tf
+    string unit = str.substring(t, str.length(t) - 1)
+    string result = ""
+    if unit == "M" or unit == "W" or unit == "D" or unit == "S"
+        string mult = str.substring(t, 0, str.length(t) - 1)
+        result := (mult == "" ? "1" : mult) + unit
+    else
+        int minutes = int(str.tonumber(t))
+        result := minutes % 60 == 0 ? str.tostring(int(minutes / 60)) + "H" : str.tostring(minutes) + "m"
+    result
+
+// 高周期必须 ≥ 图表周期，否则取到的是低周期最后一根的值，没有意义
+chartSec = timeframe.in_seconds()
+tfOk(bool on, string tf) =>
+    on and timeframe.in_seconds(tf) >= chartSec
+
+// 一次请求取回一个周期的 4 条 EMA + 最长那条 EMA 的斜率（长度为 0 时用 1 占位，之后被开关屏蔽）
+emaSet(int l1, int l2, int l3, int l4) =>
+    float a    = ta.ema(srcInput, math.max(l1, 1))
+    float b    = ta.ema(srcInput, math.max(l2, 1))
+    float c    = ta.ema(srcInput, math.max(l3, 1))
+    float d    = ta.ema(srcInput, math.max(l4, 1))
+    float slow = ta.ema(srcInput, math.max(l1, l2, l3, l4, 1))
+    [a, b, c, d, slow - slow[1]]
+
+// 趋势打分（-4 ~ +4）= 位置分 (-2 ~ +2) + 排列分 (-1 / 0 / +1) + 斜率分 (-1 / 0 / +1)
+tfTrend(bool ok, int l1, int l2, int l3, int l4, float e1, float e2, float e3, float e4, float slope) =>
+    int stack    = 0
+    int above    = 0
+    int n        = 0
+    int slopeDir = 0
+    int score    = 0
+    if ok
+        array<int>   lAll = array.from(l1, l2, l3, l4)
+        array<float> eAll = array.from(e1, e2, e3, e4)
+        array<int>   ls   = array.new<int>()
+        array<float> es   = array.new<float>()
+        for k = 0 to 3
+            if lAll.get(k) > 0 and not na(eAll.get(k))
+                ls.push(lAll.get(k))
+                es.push(eAll.get(k))
+        n := es.size()
+        if n > 0
+            for e in es
+                if close > e
+                    above += 1
+            array<int> ord = ls.sort_indices(order.ascending)
+            bool bull = n > 1
+            bool bear = n > 1
+            if n > 1
+                for k = 0 to n - 2
+                    float fast = es.get(ord.get(k))
+                    float slow = es.get(ord.get(k + 1))
+                    if not (fast > slow)
+                        bull := false
+                    if not (fast < slow)
+                        bear := false
+            stack    := bull ? 1 : bear ? -1 : 0
+            slopeDir := na(slope) ? 0 : slope > 0 ? 1 : slope < 0 ? -1 : 0
+            score    := int(math.round((above - (n - above)) * 2.0 / n)) + stack + slopeDir
+    [stack, above, n, slopeDir, score]
+
+verdictText(float r) =>
+    r >= 0.5 ? "强多" : r > 0.15 ? "偏多" : r >= -0.15 ? "震荡" : r > -0.5 ? "偏空" : "强空"
+
+fmtPrice(float x) =>
+    na(x) ? "—" : str.tostring(x, format.mintick)
+
+fmtAtr(float d, float atr) =>
+    na(d) or na(atr) or atr == 0 ? "—" : (d >= 0 ? "+" : "") + str.tostring(d / atr, "0.0") + "×"
+
+// ─────────────────────────────────────────────
+// 数据：4 次 request.security 取回 16 条 EMA + 4 个斜率，1 次取 ATR
+// ─────────────────────────────────────────────
+[e11, e12, e13, e14, s1] = request.security(syminfo.tickerid, tf1, emaSet(tf1L1, tf1L2, tf1L3, tf1L4))
+[e21, e22, e23, e24, s2] = request.security(syminfo.tickerid, tf2, emaSet(tf2L1, tf2L2, tf2L3, tf2L4))
+[e31, e32, e33, e34, s3] = request.security(syminfo.tickerid, tf3, emaSet(tf3L1, tf3L2, tf3L3, tf3L4))
+[e41, e42, e43, e44, s4] = request.security(syminfo.tickerid, tf4, emaSet(tf4L1, tf4L2, tf4L3, tf4L4))
+atrHtf   = request.security(syminfo.tickerid, atrTfInput, ta.atr(atrLenInput))
+chartAtr = ta.atr(14)
+atrVal   = nz(atrHtf, chartAtr)
+
+ok1 = tfOk(tf1On, tf1)
+ok2 = tfOk(tf2On, tf2)
+ok3 = tfOk(tf3On, tf3)
+ok4 = tfOk(tf4On, tf4)
+
+// 只随输入变化的元数据，第一根K线建一次
+var array<string> tfNames = array.from(formatTf(tf1), formatTf(tf2), formatTf(tf3), formatTf(tf4))
+var array<color>  tfCols  = array.from(tf1Col, tf2Col, tf3Col, tf4Col)
+var array<float>  tfWs    = array.from(tf1W, tf2W, tf3W, tf4W)
+var array<int>    lens    = array.from(tf1L1, tf1L2, tf1L3, tf1L4, tf2L1, tf2L2, tf2L3, tf2L4, tf3L1, tf3L2, tf3L3, tf3L4, tf4L1, tf4L2, tf4L3, tf4L4)
+var array<bool>   ons     = array.from(
+     ok1 and tf1L1 > 0, ok1 and tf1L2 > 0, ok1 and tf1L3 > 0, ok1 and tf1L4 > 0,
+     ok2 and tf2L1 > 0, ok2 and tf2L2 > 0, ok2 and tf2L3 > 0, ok2 and tf2L4 > 0,
+     ok3 and tf3L1 > 0, ok3 and tf3L2 > 0, ok3 and tf3L3 > 0, ok3 and tf3L4 > 0,
+     ok4 and tf4L1 > 0, ok4 and tf4L2 > 0, ok4 and tf4L3 > 0, ok4 and tf4L4 > 0)
+
+vals = array.from(e11, e12, e13, e14, e21, e22, e23, e24, e31, e32, e33, e34, e41, e42, e43, e44)
+
+// ─────────────────────────────────────────────
+// ③ 趋势矩阵（每根K线都算，供趋势转向警报使用）
+// ─────────────────────────────────────────────
+[st1, ab1, n1, sl1, sc1] = tfTrend(ok1, tf1L1, tf1L2, tf1L3, tf1L4, e11, e12, e13, e14, s1)
+[st2, ab2, n2, sl2, sc2] = tfTrend(ok2, tf2L1, tf2L2, tf2L3, tf2L4, e21, e22, e23, e24, s2)
+[st3, ab3, n3, sl3, sc3] = tfTrend(ok3, tf3L1, tf3L2, tf3L3, tf3L4, e31, e32, e33, e34, s3)
+[st4, ab4, n4, sl4, sc4] = tfTrend(ok4, tf4L1, tf4L2, tf4L3, tf4L4, e41, e42, e43, e44, s4)
+
+int   validTf    = (n1 > 0 ? 1 : 0) + (n2 > 0 ? 1 : 0) + (n3 > 0 ? 1 : 0) + (n4 > 0 ? 1 : 0)
+int   totalScore = sc1 + sc2 + sc3 + sc4
+float trendRatio = validTf > 0 ? totalScore / (4.0 * validTf) : 0.0
+int   bias       = trendRatio > 0.15 ? 1 : trendRatio < -0.15 ? -1 : 0
+
+alertcondition(bias == 1 and bias[1] != 1, "综合趋势转多", "{{ticker}} 多周期 EMA 趋势矩阵转为偏多")
+alertcondition(bias == -1 and bias[1] != -1, "综合趋势转空", "{{ticker}} 多周期 EMA 趋势矩阵转为偏空")
+
+// ─────────────────────────────────────────────
+// 汇聚区辅助函数
+// ─────────────────────────────────────────────
+// 1 = 阻力（整个区在价格上方），-1 = 支撑，0 = 价格在区内
+zoneSide(Zone z) =>
+    z.bot > close ? 1 : z.top < close ? -1 : 0
+
+zoneColor(int side) =>
+    side == 1 ? resColInput : side == -1 ? supColInput : inColInput
+
+sideName(int side) =>
+    side == 1 ? "阻力" : side == -1 ? "支撑" : "所在"
+
+// "1H 5/12 · 4H 34"
+buildMembers(Zone z) =>
+    array<string> parts = array.new<string>()
+    for t = 0 to 3
+        array<string> ls = array.new<string>()
+        for L in z.lvls
+            if L.tfIdx == t
+                ls.push(str.tostring(L.len))
+        if ls.size() > 0
+            parts.push(tfNames.get(t) + " " + array.join(ls, "/"))
+    array.join(parts, " · ")
+
+// 显示用的上下沿：太薄的区按最小厚度撑开
+padded(Zone z) =>
+    float minH = minHeightInput * atrVal
+    float t = z.top
+    float b = z.bot
+    if t - b < minH
+        float mid = (t + b) / 2
+        t := mid + minH / 2
+        b := mid - minH / 2
+    [t, b]
+
+// ─────────────────────────────────────────────
+// 表格
+// ─────────────────────────────────────────────
+var table tbl = table.new(tablePosInput, 5, 30, border_width = 1)
+
+cell(int c, int r, string txt, color bg, color fg, string halign) =>
+    table.cell(tbl, c, r, txt, bgcolor = bg, text_color = fg, text_halign = halign, text_size = toSize(tableSizeInput))
+
+headerRow(int r, string c0, string c1, string c2, string c3, string c4) =>
+    cell(0, r, c0, headerBgInput, headerTextInput, text.align_left)
+    cell(1, r, c1, headerBgInput, headerTextInput, text.align_center)
+    cell(2, r, c2, headerBgInput, headerTextInput, text.align_center)
+    cell(3, r, c3, headerBgInput, headerTextInput, text.align_center)
+    cell(4, r, c4, headerBgInput, headerTextInput, text.align_center)
+
+// ─────────────────────────────────────────────
+// 最后一根K线：建汇聚区 → 算盈亏比 → 画图 → 填表 → 警报
+// ─────────────────────────────────────────────
+var int dayStartBar = na
+if session.isfirstbar
+    dayStartBar := bar_index
+
+var array<box>   zoneBoxes = array.new<box>()
+var array<label> labels    = array.new<label>()
+var array<line>  lines     = array.new<line>()
+
+if barstate.islast
+    for bx in zoneBoxes
+        box.delete(bx)
+    for lb in labels
+        label.delete(lb)
+    for ln in lines
+        line.delete(ln)
+    zoneBoxes.clear()
+    labels.clear()
+    lines.clear()
+
+    // ── ① 建汇聚区：EMA 从低到高排序，从区间最低点起 thr 以内的并入同一区 ──
+    array<Lvl> lvs = array.new<Lvl>()
+    for i = 0 to 15
+        float v = vals.get(i)
+        if ons.get(i) and not na(v)
+            int t = int(i / 4)
+            lvs.push(Lvl.new(v, t, lens.get(i), tfWs.get(t)))
+
+    array<float> lvVals = array.new<float>()
+    for L in lvs
+        lvVals.push(L.value)
+    array<int> ascIdx = lvVals.sort_indices(order.ascending)
+
+    float thr = mergeAtrInput * atrVal
+    array<Zone> zones = array.new<Zone>()
+    Zone cur = na
+    for j in ascIdx
+        Lvl L = lvs.get(j)
+        if na(cur) or L.value - cur.bot > thr
+            cur := Zone.new(L.value, L.value, 0.0, 0, array.new<Lvl>(), "")
+            zones.push(cur)
+        cur.top      := L.value
+        cur.strength := cur.strength + L.weight
+        cur.count    := cur.count + 1
+        cur.lvls.push(L)
+    for z in zones
+        z.members := buildMembers(z)
+
+    int zc = zones.size()
+
+    // ── ② 盈亏比：找价格所在区、下方最近区、上方最近区（zones 为升序） ──
+    int inIdx    = -1
+    int belowIdx = -1
+    int aboveIdx = -1
+    if zc > 0
+        for i = 0 to zc - 1
+            Zone z = zones.get(i)
+            if z.top < close
+                belowIdx := i
+            else if z.bot > close
+                if aboveIdx == -1
+                    aboveIdx := i
+            else
+                inIdx := i
+
+    // 做多：止损在所在区 / 下方最近区的下沿之下，目标是上方第一个够强的区的下沿
+    int longStopIdx = inIdx >= 0 ? inIdx : belowIdx
+    int longTgtIdx  = -1
+    if aboveIdx >= 0
+        for i = aboveIdx to zc - 1
+            if zones.get(i).strength >= minTgtInput
+                longTgtIdx := i
+                break
+    float longStop = na
+    float longTgt  = na
+    if longStopIdx >= 0
+        longStop := zones.get(longStopIdx).bot - stopBufInput * atrVal
+    if longTgtIdx >= 0
+        longTgt := zones.get(longTgtIdx).bot
+    float longRR = na(longStop) or na(longTgt) or close - longStop <= 0 ? na : (longTgt - close) / (close - longStop)
+
+    // 做空：止损在所在区 / 上方最近区的上沿之上，目标是下方第一个够强的区的上沿
+    int shortStopIdx = inIdx >= 0 ? inIdx : aboveIdx
+    int shortTgtIdx  = -1
+    if belowIdx >= 0
+        for i = belowIdx to 0
+            if zones.get(i).strength >= minTgtInput
+                shortTgtIdx := i
+                break
+    float shortStop = na
+    float shortTgt  = na
+    if shortStopIdx >= 0
+        shortStop := zones.get(shortStopIdx).top + stopBufInput * atrVal
+    if shortTgtIdx >= 0
+        shortTgt := zones.get(shortTgtIdx).top
+    float shortRR = na(shortStop) or na(shortTgt) or shortStop - close <= 0 ? na : (close - shortTgt) / (shortStop - close)
+
+    // ── 画图 ──
+    int x1 = switch drawModeInput
+        "最后K线左移"   => bar_index - lineBackInput
+        "贯穿整个图表" => bar_index - lineBackInput
+        => nz(dayStartBar, bar_index)
+    int x2  = bar_index + labelOffsetInput
+    ext     = drawModeInput == "贯穿整个图表" ? extend.both : extend.right
+
+    for z in zones
+        [pt, pb] = padded(z)
+        int   side  = zoneSide(z)
+        color c     = zoneColor(side)
+        int   transp = int(math.max(55, 85 - z.strength * 2.5))
+        zoneBoxes.push(box.new(x1, pt, x2, pb, border_color = color.new(c, 40), bgcolor = color.new(c, transp), extend = ext))
+        if showZoneLblInput
+            string txt = sideName(side) + " " + str.tostring(z.strength, "0.#") + " · " + z.members
+            labels.push(label.new(x2, (pt + pb) / 2, txt, color = color.new(c, 25), textcolor = labelTextInput, style = label.style_label_left, size = toSize(labelSizeInput)))
+
+    if showEmaLinesInput
+        for i = 0 to 15
+            float v = vals.get(i)
+            if ons.get(i) and not na(v)
+                lines.push(line.new(x1, v, x2, v, color = tfCols.get(int(i / 4)), width = 1, style = line.style_dotted, extend = ext))
+
+    int planSide = switch planDrawInput
+        "做多"       => 1
+        "做空"       => -1
+        "按趋势自动" => bias
+        => 0
+    float pStop = planSide == 1 ? longStop : planSide == -1 ? shortStop : na
+    float pTgt  = planSide == 1 ? longTgt  : planSide == -1 ? shortTgt  : na
+    float pRR   = planSide == 1 ? longRR   : planSide == -1 ? shortRR   : na
+    if planSide != 0 and not na(pStop) and not na(pTgt)
+        string dir = planSide == 1 ? "多" : "空"
+        lines.push(line.new(bar_index, pTgt,  x2, pTgt,  color = tgtColInput,  width = 2, style = line.style_dashed))
+        lines.push(line.new(bar_index, pStop, x2, pStop, color = stopColInput, width = 2, style = line.style_dashed))
+        labels.push(label.new(bar_index + 1, pTgt, dir + " 目标 " + fmtPrice(pTgt) + (na(pRR) ? "" : "  " + str.tostring(pRR, "0.0") + "R"), color = color.new(tgtColInput, 20), textcolor = labelTextInput, style = label.style_label_lower_left, size = toSize(labelSizeInput)))
+        labels.push(label.new(bar_index + 1, pStop, dir + " 止损 " + fmtPrice(pStop), color = color.new(stopColInput, 20), textcolor = labelTextInput, style = label.style_label_upper_left, size = toSize(labelSizeInput)))
+
+    // ── 表格 ──
+    table.clear(tbl, 0, 0, 4, 29)
+    if showTableInput
+        int r = 0
+
+        if showMatrixInput
+            headerRow(r, "趋势矩阵", "排列", "位置", "斜率", "得分")
+            r += 1
+            array<int> stA = array.from(st1, st2, st3, st4)
+            array<int> abA = array.from(ab1, ab2, ab3, ab4)
+            array<int> nA  = array.from(n1, n2, n3, n4)
+            array<int> slA = array.from(sl1, sl2, sl3, sl4)
+            array<int> scA = array.from(sc1, sc2, sc3, sc4)
+            for t = 0 to 3
+                int n = nA.get(t)
+                if n > 0
+                    int st = stA.get(t)
+                    int sl = slA.get(t)
+                    int sc = scA.get(t)
+                    color stC = st == 1 ? bullColInput : st == -1 ? bearColInput : cellBgInput
+                    color slC = sl == 1 ? bullColInput : sl == -1 ? bearColInput : cellBgInput
+                    cell(0, r, tfNames.get(t), cellBgInput, tfCols.get(t), text.align_left)
+                    cell(1, r, st == 1 ? "多头" : st == -1 ? "空头" : "交织", stC, cellTextInput, text.align_center)
+                    cell(2, r, "价上 " + str.tostring(abA.get(t)) + "/" + str.tostring(n), cellBgInput, cellTextInput, text.align_center)
+                    cell(3, r, sl == 1 ? "↑" : sl == -1 ? "↓" : "→", slC, cellTextInput, text.align_center)
+                    cell(4, r, (sc > 0 ? "+" : "") + str.tostring(sc), color.from_gradient(sc, -4, 4, bearColInput, bullColInput), cellTextInput, text.align_center)
+                    r += 1
+            color vC = bias == 1 ? bullColInput : bias == -1 ? bearColInput : cellBgInput
+            cell(0, r, "综合", headerBgInput, headerTextInput, text.align_left)
+            cell(1, r, verdictText(trendRatio), vC, cellTextInput, text.align_center)
+            cell(2, r, "", headerBgInput, headerTextInput, text.align_center)
+            cell(3, r, "", headerBgInput, headerTextInput, text.align_center)
+            cell(4, r, (totalScore > 0 ? "+" : "") + str.tostring(totalScore) + " / " + str.tostring(4 * validTf), vC, cellTextInput, text.align_center)
+            r += 1
+
+        if showRRInput
+            headerRow(r, "盈亏比", "止损", "目标", "R:R", "保本胜率")
+            r += 1
+            for isLong in array.from(true, false)
+                float stp = isLong ? longStop : shortStop
+                float tgt = isLong ? longTgt  : shortTgt
+                float rr  = isLong ? longRR   : shortRR
+                color rrC = na(rr) ? cellBgInput : rr >= 2 ? bullColInput : rr >= 1 ? color.new(color.orange, 0) : bearColInput
+                cell(0, r, isLong ? "做多" : "做空", cellBgInput, isLong ? bullColInput : bearColInput, text.align_left)
+                cell(1, r, fmtPrice(stp), cellBgInput, cellTextInput, text.align_right)
+                cell(2, r, fmtPrice(tgt), cellBgInput, cellTextInput, text.align_right)
+                cell(3, r, na(rr) ? "—" : str.tostring(rr, "0.00"), rrC, cellTextInput, text.align_center)
+                cell(4, r, na(rr) ? "—" : str.tostring(100 / (1 + rr), "0") + "%", cellBgInput, cellTextInput, text.align_center)
+                r += 1
+
+        if showZoneTblInput
+            headerRow(r, "汇聚区", "类型", "强度", "成员", "距离 (ATR)")
+            r += 1
+            bool priceDone = false
+            if zc > 0
+                for i = zc - 1 to 0
+                    Zone z = zones.get(i)
+                    int side = zoneSide(z)
+                    // 当前价格行插在第一个不在价格上方的区之前
+                    if not priceDone and side != 1
+                        cell(0, r, "── 当前价格 ──", headerBgInput, headerTextInput, text.align_left)
+                        cell(1, r, fmtPrice(close), headerBgInput, headerTextInput, text.align_right)
+                        cell(2, r, "", headerBgInput, headerTextInput, text.align_center)
+                        cell(3, r, "", headerBgInput, headerTextInput, text.align_center)
+                        cell(4, r, "", headerBgInput, headerTextInput, text.align_center)
+                        r += 1
+                        priceDone := true
+                    color zC = color.new(zoneColor(side), 65)
+                    float dist = side == 1 ? z.bot - close : side == -1 ? z.top - close : 0.0
+                    string rangeTxt = z.top == z.bot ? fmtPrice(z.top) : fmtPrice(z.bot) + "–" + fmtPrice(z.top)
+                    cell(0, r, rangeTxt, zC, cellTextInput, text.align_left)
+                    cell(1, r, sideName(side), zC, cellTextInput, text.align_center)
+                    cell(2, r, str.tostring(z.strength, "0.#"), zC, cellTextInput, text.align_center)
+                    cell(3, r, z.members, zC, cellTextInput, text.align_left)
+                    cell(4, r, fmtAtr(dist, atrVal), zC, cellTextInput, text.align_right)
+                    r += 1
+            if not priceDone
+                cell(0, r, "── 当前价格 ──", headerBgInput, headerTextInput, text.align_left)
+                cell(1, r, fmtPrice(close), headerBgInput, headerTextInput, text.align_right)
+                cell(2, r, "", headerBgInput, headerTextInput, text.align_center)
+                cell(3, r, "", headerBgInput, headerTextInput, text.align_center)
+                cell(4, r, "", headerBgInput, headerTextInput, text.align_center)
+
+    // ── 警报：价格进入强度足够的汇聚区（只在实时K线上触发） ──
+    if alertZoneInput
+        for z in zones
+            if z.strength >= alertZoneMinInput
+                [pt, pb] = padded(z)
+                bool nowIn  = close >= pb and close <= pt
+                bool prevIn = close[1] >= pb and close[1] <= pt
+                if nowIn and not prevIn
+                    alert(syminfo.ticker + " 进入汇聚区 " + fmtPrice(pb) + "–" + fmtPrice(pt) + "  强度 " + str.tostring(z.strength, "0.#") + " · " + z.members, alert.freq_once_per_bar)
