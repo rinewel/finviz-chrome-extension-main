@@ -11,6 +11,7 @@ GROUP_GLOBAL  = "通用设置"
 GROUP_MA      = "当前周期均线云"
 GROUP_VWAP    = "VWAP"
 GROUP_MTF     = "MTF 云图"
+GROUP_ALERT   = "警报"
 
 // ─────────────────────────────────────────────
 // 枚举（下拉选项）
@@ -352,8 +353,20 @@ plotshape(flipToBull, title = "云2 翻多", style = shape.triangleup,   locatio
 plotshape(flipToBear, title = "云2 翻空", style = shape.triangledown, location = location.abovebar, color = #880b0bf5, size = size.small, offset = cloudLeadInput, editable = false, display = display.pane)
 
 // ─────────────────────────────────────────────
-// 警报（在 TradingView「创建警报」中选择本指标和对应条件）
+// 警报
+// 使用 alert() 而不是 alertcondition()：alertcondition 每个都占用一个图形数量（上限 64），alert() 不占用
+// 用法：在 TradingView「创建警报」中选择本指标 →「任何 alert() 函数调用」，再在下方勾选需要的警报类型
 // ─────────────────────────────────────────────
+alertOnBarCloseInput  = input.bool(true, "仅在K线收盘时发送", tooltip = "打开后只在K线收盘确认时发送警报；关闭后盘中条件一出现就发送（每根K线最多一次）。", group = GROUP_ALERT, display = display.none)
+alertCloud2BullInput  = input.bool(true, "云2 翻多", group = GROUP_ALERT, inline = "a1", display = display.none)
+alertCloud2BearInput  = input.bool(true, "云2 翻空", group = GROUP_ALERT, inline = "a1", display = display.none)
+alertCloud3BullInput  = input.bool(true, "云3 翻多", group = GROUP_ALERT, inline = "a2", display = display.none)
+alertCloud3BearInput  = input.bool(true, "云3 翻空", group = GROUP_ALERT, inline = "a2", display = display.none)
+alertAboveCloud3Input = input.bool(true, "收盘站上云3", group = GROUP_ALERT, inline = "a3", display = display.none)
+alertBelowCloud3Input = input.bool(true, "收盘跌破云3", group = GROUP_ALERT, inline = "a3", display = display.none)
+alertPullbackInput    = input.bool(true, "多头回踩云1", group = GROUP_ALERT, inline = "a4", display = display.none)
+alertBounceInput      = input.bool(true, "空头反弹云1", group = GROUP_ALERT, inline = "a4", display = display.none)
+
 cloud3FlipToBull = isCloud3Bull and not isCloud3Bull[1]
 cloud3FlipToBear = not isCloud3Bull and isCloud3Bull[1]
 
@@ -366,11 +379,17 @@ isBounceToCloud1   = not isCloud3Bull and high >= cloud1Bottom and close <= clou
 pullbackToCloud1   = isPullbackToCloud1 and not isPullbackToCloud1[1]
 bounceToCloud1     = isBounceToCloud1 and not isBounceToCloud1[1]
 
-alertcondition(flipToBull,       "云2 翻多", "{{ticker}} {{interval}} 云2(默认 5-12) 翻多，收盘价 {{close}}")
-alertcondition(flipToBear,       "云2 翻空", "{{ticker}} {{interval}} 云2(默认 5-12) 翻空，收盘价 {{close}}")
-alertcondition(cloud3FlipToBull, "云3 翻多", "{{ticker}} {{interval}} 云3(默认 34-50) 翻多，收盘价 {{close}}")
-alertcondition(cloud3FlipToBear, "云3 翻空", "{{ticker}} {{interval}} 云3(默认 34-50) 翻空，收盘价 {{close}}")
-alertcondition(closeAboveCloud3, "收盘站上云3", "{{ticker}} {{interval}} 收盘价站上云3(默认 34-50)，收盘价 {{close}}")
-alertcondition(closeBelowCloud3, "收盘跌破云3", "{{ticker}} {{interval}} 收盘价跌破云3(默认 34-50)，收盘价 {{close}}")
-alertcondition(pullbackToCloud1, "多头回踩云1", "{{ticker}} {{interval}} 云3 多头，价格回踩云1(默认 8-9)，收盘价 {{close}}")
-alertcondition(bounceToCloud1,   "空头反弹云1", "{{ticker}} {{interval}} 云3 空头，价格反弹至云1(默认 8-9)，收盘价 {{close}}")
+alertFreq = alertOnBarCloseInput ? alert.freq_once_per_bar_close : alert.freq_once_per_bar
+
+sendAlert(isEnabled, isTriggered, message) =>
+    if isEnabled and isTriggered
+        alert(syminfo.ticker + " " + timeframe.period + " " + message + "，收盘价 " + str.tostring(close, format.mintick), alertFreq)
+
+sendAlert(alertCloud2BullInput,  flipToBull,       "云2 翻多")
+sendAlert(alertCloud2BearInput,  flipToBear,       "云2 翻空")
+sendAlert(alertCloud3BullInput,  cloud3FlipToBull, "云3 翻多")
+sendAlert(alertCloud3BearInput,  cloud3FlipToBear, "云3 翻空")
+sendAlert(alertAboveCloud3Input, closeAboveCloud3, "收盘站上云3")
+sendAlert(alertBelowCloud3Input, closeBelowCloud3, "收盘跌破云3")
+sendAlert(alertPullbackInput,    pullbackToCloud1, "云3 多头，回踩云1")
+sendAlert(alertBounceInput,      bounceToCloud1,   "云3 空头，反弹至云1")
