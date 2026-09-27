@@ -47,7 +47,6 @@ lineBackInput    = input.int(25, "左移K线数", minval = 1, tooltip = "「最�
 labelOffsetInput = input.int(12, "标签右移K线数", minval = 0, group = G_GEN)
 labelSizeInput   = input.string("small", "标签字号", options = ["tiny", "small", "normal", "large", "huge"], group = G_GEN, inline = "lb")
 labelTextInput   = input.color(color.white, "", group = G_GEN, inline = "lb")
-showEmaLinesInput = input.bool(false, "同时显示单条 EMA 细线", group = G_GEN)
 
 // ─────────────────────────────────────────────
 // 周期设置：开关 / 周期 / 颜色 / 权重；4 个 EMA 长度（填 0 关闭该条，请按从短到长填写）
@@ -95,7 +94,7 @@ tf4L4  = input.int(50, "",    minval = 0, group = G_TF4, inline = "b", tooltip =
 // ① 汇聚区
 // ─────────────────────────────────────────────
 mergeAtrInput  = input.float(0.25, "合并距离 (ATR倍)", minval = 0, step = 0.05, tooltip = "一个区间从最低的 EMA 算起，高度不超过此距离的 EMA 都并入同一区间", group = G_ZONE)
-minHeightInput = input.float(0.05, "最小显示厚度 (ATR倍)", minval = 0, step = 0.01, tooltip = "只有一条 EMA 的区间太薄看不见，按此厚度显示", group = G_ZONE)
+minHeightInput = input.float(0.15, "色块最小厚度 (ATR倍)", minval = 0.01, step = 0.01, tooltip = "每个区至少显示这么厚，只有一个价位的区也是色块而不是一条线", group = G_ZONE)
 atrTfInput     = input.timeframe("1D", "ATR 周期", group = G_ZONE, inline = "atr")
 atrLenInput    = input.int(14, "长度", minval = 1, group = G_ZONE, inline = "atr")
 resColInput    = input.color(#ff5252, "阻力", group = G_ZONE, inline = "zc")
@@ -425,17 +424,11 @@ if barstate.islast
         [pt, pb] = padded(z)
         int   side  = zoneSide(z)
         color c     = zoneColor(side)
-        int   transp = int(math.max(55, 85 - z.strength * 2.5))
-        zoneBoxes.push(box.new(x1, pt, x2, pb, border_color = color.new(c, 40), bgcolor = color.new(c, transp), extend = ext))
+        int   transp = int(math.max(45, 78 - z.strength * 2.5))
+        zoneBoxes.push(box.new(x1, pt, x2, pb, border_color = color.new(c, 75), bgcolor = color.new(c, transp), extend = ext))
         if showZoneLblInput
             string txt = sideName(side) + " " + str.tostring(z.strength, "0.#") + " · " + z.members
             labels.push(label.new(x2, (pt + pb) / 2, txt, color = color.new(c, 25), textcolor = labelTextInput, style = label.style_label_left, size = toSize(labelSizeInput)))
-
-    if showEmaLinesInput
-        for i = 0 to 15
-            float v = vals.get(i)
-            if ons.get(i) and not na(v)
-                lines.push(line.new(x1, v, x2, v, color = tfCols.get(int(i / 4)), width = 1, style = line.style_dotted, extend = ext))
 
     int planSide = switch planDrawInput
         "做多"       => 1
