@@ -1,0 +1,443 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// 基于 Air Gap MTF（原始概念 © Mereep01）扩展成支撑阻力指标
+
+// 多来源支撑阻力区：
+//   来源 = 多周期 EMA + 摆动高低点 + 前日 / 前周 / 前月的高低收
+//   距离很近的价位合并成一个区，强度 = 各来源权重之和
+//   价格上方最近的区依次标为 R1、R2、R3，下方标为 S1、S2、S3
+
+//@version=6
+indicator("Air Gap S/R Zones v6", "AG S/R", overlay = true, max_boxes_count = 100, max_labels_count = 100, max_lines_count = 100)
+
+// ─────────────────────────────────────────────
+// 常量 / 类型
+// ─────────────────────────────────────────────
+G_GEN   = "通用设置"
+G_ZONE  = "支撑阻力区"
+G_EMA   = "来源：多周期 EMA"
+G_TF1   = "EMA 周期 1"
+G_TF2   = "EMA 周期 2"
+G_TF3   = "EMA 周期 3"
+G_TF4   = "EMA 周期 4"
+G_PIV   = "来源：摆动高低点"
+G_PRD   = "来源：前日 / 前周 / 前月"
+G_TABLE = "表格"
+G_ALERT = "警报"
+
+// 单个价位：grp + item 用来生成来源说明，如 "4H 34/50 · 前日 高 · 摆动高×2"
+type Lvl
+    float  value
+    string grp
+    string item
+    float  weight
+
+// 支撑阻力区：top/bot 为成员价位的真实最高/最低值（未加显示厚度）
+type Zone
+    float      top
+    float      bot
+    float      strength
+    array<Lvl> lvls
+    string     members
+
+// ─────────────────────────────────────────────
+// 通用设置
+// ─────────────────────────────────────────────
+drawModeInput    = input.string("当日开盘起", "区域起点", options = ["当日开盘起", "最后K线左移", "贯穿整个图表"], group = G_GEN)
+lineBackInput    = input.int(25, "左移K线数", minval = 1, group = G_GEN)
+labelOffsetInput = input.int(8, "标签右移K线数", minval = 0, group = G_GEN)
+labelSizeInput   = input.string("small", "标签字号", options = ["tiny", "small", "normal", "large", "huge"], group = G_GEN, inline = "lb")
+labelTextInput   = input.color(color.white, "", group = G_GEN, inline = "lb")
+
+// ─────────────────────────────────────────────
+// 支撑阻力区
+// ─────────────────────────────────────────────
+maxEachInput   = input.int(3, "每侧显示数量", minval = 0, tooltip = "价格上方显示几个阻力区、下方显示几个支撑区。0 = 全部显示", group = G_ZONE)
+minStrInput    = input.float(2.0, "最小强度", minval = 0, step = 0.5, tooltip = "强度低于此值的区不显示、不参与排名", group = G_ZONE)
+mergeAtrInput  = input.float(0.25, "合并距离 (ATR倍)", minval = 0, step = 0.05, tooltip = "一个区从最低的价位算起，高度不超过此距离的价位都并入同一区", group = G_ZONE)
+minHeightInput = input.float(0.05, "最小显示厚度 (ATR倍)", minval = 0, step = 0.01, group = G_ZONE)
+atrTfInput     = input.timeframe("1D", "ATR 周期", group = G_ZONE, inline = "atr")
+atrLenInput    = input.int(14, "长度", minval = 1, group = G_ZONE, inline = "atr")
+resColInput    = input.color(#ff5252, "阻力", group = G_ZONE, inline = "zc")
+supColInput    = input.color(#00e676, "支撑", group = G_ZONE, inline = "zc")
+inColInput     = input.color(#9e9e9e, "价格所在", group = G_ZONE, inline = "zc")
+
+// ─────────────────────────────────────────────
+// 来源：多周期 EMA（开关 / 周期 / 权重；4 个 EMA 长度，填 0 关闭该条）
+// ─────────────────────────────────────────────
+useEmaInput = input.bool(true, "使用多周期 EMA", group = G_EMA)
+srcInput    = input.source(hl2, "EMA 数据源", group = G_EMA)
+W_TIP       = "该周期每条 EMA 对区强度的贡献"
+
+tf1On = input.bool(true, "", group = G_TF1, inline = "a")
+tf1   = input.timeframe("30", "周期", group = G_TF1, inline = "a")
+tf1W  = input.float(1.0, "权重", minval = 0, step = 0.5, group = G_TF1, inline = "a", tooltip = W_TIP)
+tf1L1 = input.int(5,  "EMA", minval = 0, group = G_TF1, inline = "b")
+tf1L2 = input.int(12, "",    minval = 0, group = G_TF1, inline = "b")
+tf1L3 = input.int(34, "",    minval = 0, group = G_TF1, inline = "b")
+tf1L4 = input.int(50, "",    minval = 0, group = G_TF1, inline = "b")
+
+tf2On = input.bool(true, "", group = G_TF2, inline = "a")
+tf2   = input.timeframe("60", "周期", group = G_TF2, inline = "a")
+tf2W  = input.float(1.5, "权重", minval = 0, step = 0.5, group = G_TF2, inline = "a", tooltip = W_TIP)
+tf2L1 = input.int(5,  "EMA", minval = 0, group = G_TF2, inline = "b")
+tf2L2 = input.int(12, "",    minval = 0, group = G_TF2, inline = "b")
+tf2L3 = input.int(34, "",    minval = 0, group = G_TF2, inline = "b")
+tf2L4 = input.int(50, "",    minval = 0, group = G_TF2, inline = "b")
+
+tf3On = input.bool(true, "", group = G_TF3, inline = "a")
+tf3   = input.timeframe("240", "周期", group = G_TF3, inline = "a")
+tf3W  = input.float(2.0, "权重", minval = 0, step = 0.5, group = G_TF3, inline = "a", tooltip = W_TIP)
+tf3L1 = input.int(5,  "EMA", minval = 0, group = G_TF3, inline = "b")
+tf3L2 = input.int(12, "",    minval = 0, group = G_TF3, inline = "b")
+tf3L3 = input.int(34, "",    minval = 0, group = G_TF3, inline = "b")
+tf3L4 = input.int(50, "",    minval = 0, group = G_TF3, inline = "b")
+
+tf4On = input.bool(true, "", group = G_TF4, inline = "a")
+tf4   = input.timeframe("1D", "周期", group = G_TF4, inline = "a")
+tf4W  = input.float(3.0, "权重", minval = 0, step = 0.5, group = G_TF4, inline = "a", tooltip = W_TIP)
+tf4L1 = input.int(5,  "EMA", minval = 0, group = G_TF4, inline = "b")
+tf4L2 = input.int(12, "",    minval = 0, group = G_TF4, inline = "b")
+tf4L3 = input.int(34, "",    minval = 0, group = G_TF4, inline = "b")
+tf4L4 = input.int(50, "",    minval = 0, group = G_TF4, inline = "b")
+
+// ─────────────────────────────────────────────
+// 来源：摆动高低点（图表周期）
+// ─────────────────────────────────────────────
+usePivInput   = input.bool(true, "使用摆动高低点", group = G_PIV)
+pivLeftInput  = input.int(10, "左侧K线数", minval = 1, group = G_PIV, inline = "pv")
+pivRightInput = input.int(10, "右侧K线数", minval = 1, group = G_PIV, inline = "pv", tooltip = "右侧K线数越大，摆动点越可靠，但确认越晚")
+pivKeepInput  = input.int(10, "保留最近几个", minval = 1, maxval = 50, tooltip = "高点、低点各保留最近的这么多个", group = G_PIV)
+pivWInput     = input.float(1.5, "每个摆动点权重", minval = 0, step = 0.5, tooltip = "同一区里有多个摆动点（价格多次在此转向），强度会叠加", group = G_PIV)
+
+// ─────────────────────────────────────────────
+// 来源：前日 / 前周 / 前月
+// ─────────────────────────────────────────────
+usePdInput    = input.bool(true, "前日", group = G_PRD, inline = "pd")
+pdWInput      = input.float(2.0, "权重", minval = 0, step = 0.5, group = G_PRD, inline = "pd")
+pdCloseInput  = input.bool(true, "含收盘价", group = G_PRD, inline = "pd")
+usePwInput    = input.bool(true, "前周", group = G_PRD, inline = "pw")
+pwWInput      = input.float(3.0, "权重", minval = 0, step = 0.5, group = G_PRD, inline = "pw")
+usePmInput    = input.bool(true, "前月", group = G_PRD, inline = "pm")
+pmWInput      = input.float(4.0, "权重", minval = 0, step = 0.5, group = G_PRD, inline = "pm")
+
+// ─────────────────────────────────────────────
+// 表格
+// ─────────────────────────────────────────────
+showTableInput  = input.bool(true, "显示表格", group = G_TABLE)
+tablePosInput   = input.string(position.top_right, "位置", options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_center, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], group = G_TABLE)
+tableSizeInput  = input.string("small", "字号", options = ["tiny", "small", "normal", "large", "huge"], group = G_TABLE)
+headerBgInput   = input.color(color.new(#434651, 0), "表头", group = G_TABLE, inline = "hd")
+headerTextInput = input.color(color.white, "", group = G_TABLE, inline = "hd")
+cellTextInput   = input.color(color.white, "单元格文字", group = G_TABLE)
+
+// ─────────────────────────────────────────────
+// 警报
+// ─────────────────────────────────────────────
+alertTouchInput = input.bool(true, "触及支撑 / 阻力", group = G_ALERT, inline = "al")
+alertBreakInput = input.bool(true, "突破 / 跌破", group = G_ALERT, inline = "al")
+alertMinInput   = input.float(4.0, "警报最小强度", minval = 0, step = 0.5, tooltip = "创建警报时选择「任何 alert() 函数调用」", group = G_ALERT)
+
+// ─────────────────────────────────────────────
+// 工具函数
+// ─────────────────────────────────────────────
+toSize(string s) =>
+    switch s
+        "tiny"  => size.tiny
+        "small" => size.small
+        "large" => size.large
+        "huge"  => size.huge
+        => size.normal
+
+// "30" → "30m"，"240" → "4H"，"1D" → "1D"
+formatTf(string tf) =>
+    string t    = tf == "" ? timeframe.period : tf
+    string unit = str.substring(t, str.length(t) - 1)
+    string result = ""
+    if unit == "M" or unit == "W" or unit == "D" or unit == "S"
+        string mult = str.substring(t, 0, str.length(t) - 1)
+        result := (mult == "" ? "1" : mult) + unit
+    else
+        int minutes = int(str.tonumber(t))
+        result := minutes % 60 == 0 ? str.tostring(int(minutes / 60)) + "H" : str.tostring(minutes) + "m"
+    result
+
+// 请求的周期必须 ≥ 图表周期，否则取到的是低周期最后一根的值，没有意义
+chartSec = timeframe.in_seconds()
+tfOk(bool on, string tf) =>
+    on and timeframe.in_seconds(tf) >= chartSec
+
+emaSet(int l1, int l2, int l3, int l4) =>
+    [ta.ema(srcInput, math.max(l1, 1)), ta.ema(srcInput, math.max(l2, 1)), ta.ema(srcInput, math.max(l3, 1)), ta.ema(srcInput, math.max(l4, 1))]
+
+fmtPrice(float x) =>
+    na(x) ? "—" : str.tostring(x, format.mintick)
+
+fmtAtr(float d, float atr) =>
+    na(d) or na(atr) or atr == 0 ? "—" : (d >= 0 ? "+" : "") + str.tostring(d / atr, "0.0") + "×"
+
+pushLvl(array<Lvl> a, float v, string grp, string item, float w) =>
+    if not na(v) and w > 0
+        a.push(Lvl.new(v, grp, item, w))
+
+// ─────────────────────────────────────────────
+// 数据
+// ─────────────────────────────────────────────
+// 多周期 EMA：每个周期一次请求取回 4 条
+[e11, e12, e13, e14] = request.security(syminfo.tickerid, tf1, emaSet(tf1L1, tf1L2, tf1L3, tf1L4))
+[e21, e22, e23, e24] = request.security(syminfo.tickerid, tf2, emaSet(tf2L1, tf2L2, tf2L3, tf2L4))
+[e31, e32, e33, e34] = request.security(syminfo.tickerid, tf3, emaSet(tf3L1, tf3L2, tf3L3, tf3L4))
+[e41, e42, e43, e44] = request.security(syminfo.tickerid, tf4, emaSet(tf4L1, tf4L2, tf4L3, tf4L4))
+
+// 前一个周期的高低收：[1] + lookahead_on 是取已收盘周期数据、不重绘的标准写法
+[pdH, pdL, pdC] = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], lookahead = barmerge.lookahead_on)
+[pwH, pwL]      = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+[pmH, pmL]      = request.security(syminfo.tickerid, "M", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+
+atrHtf   = request.security(syminfo.tickerid, atrTfInput, ta.atr(atrLenInput))
+chartAtr = ta.atr(14)
+atrVal   = nz(atrHtf, chartAtr)
+
+// 摆动高低点：确认后存入数组，只保留最近 N 个
+ph = ta.pivothigh(high, pivLeftInput, pivRightInput)
+pl = ta.pivotlow(low, pivLeftInput, pivRightInput)
+var array<float> pivHs = array.new<float>()
+var array<float> pivLs = array.new<float>()
+if not na(ph)
+    pivHs.push(ph)
+    if pivHs.size() > pivKeepInput
+        pivHs.shift()
+if not na(pl)
+    pivLs.push(pl)
+    if pivLs.size() > pivKeepInput
+        pivLs.shift()
+
+ok1 = tfOk(tf1On, tf1)
+ok2 = tfOk(tf2On, tf2)
+ok3 = tfOk(tf3On, tf3)
+ok4 = tfOk(tf4On, tf4)
+
+// 只随输入变化的元数据，第一根K线建一次
+var array<string> tfNames = array.from(formatTf(tf1), formatTf(tf2), formatTf(tf3), formatTf(tf4))
+var array<float>  tfWs    = array.from(tf1W, tf2W, tf3W, tf4W)
+var array<int>    lens    = array.from(tf1L1, tf1L2, tf1L3, tf1L4, tf2L1, tf2L2, tf2L3, tf2L4, tf3L1, tf3L2, tf3L3, tf3L4, tf4L1, tf4L2, tf4L3, tf4L4)
+var array<bool>   ons     = array.from(
+     ok1 and tf1L1 > 0, ok1 and tf1L2 > 0, ok1 and tf1L3 > 0, ok1 and tf1L4 > 0,
+     ok2 and tf2L1 > 0, ok2 and tf2L2 > 0, ok2 and tf2L3 > 0, ok2 and tf2L4 > 0,
+     ok3 and tf3L1 > 0, ok3 and tf3L2 > 0, ok3 and tf3L3 > 0, ok3 and tf3L4 > 0,
+     ok4 and tf4L1 > 0, ok4 and tf4L2 > 0, ok4 and tf4L3 > 0, ok4 and tf4L4 > 0)
+
+vals = array.from(e11, e12, e13, e14, e21, e22, e23, e24, e31, e32, e33, e34, e41, e42, e43, e44)
+
+// ─────────────────────────────────────────────
+// 区辅助函数
+// ─────────────────────────────────────────────
+// 1 = 阻力（整个区在价格上方），-1 = 支撑，0 = 价格在区内
+zoneSide(Zone z) =>
+    z.bot > close ? 1 : z.top < close ? -1 : 0
+
+zoneColor(int side) =>
+    side == 1 ? resColInput : side == -1 ? supColInput : inColInput
+
+// 同一来源合并显示："4H 34/50 · 前日 高/收 · 摆动高×2"
+buildMembers(Zone z) =>
+    map<string, string> items = map.new<string, string>()
+    map<string, int>    cnts  = map.new<string, int>()
+    for L in z.lvls
+        string prev = items.get(L.grp)
+        if na(prev)
+            items.put(L.grp, L.item)
+            cnts.put(L.grp, 1)
+        else
+            items.put(L.grp, L.item == "" ? prev : prev + "/" + L.item)
+            cnts.put(L.grp, cnts.get(L.grp) + 1)
+    array<string> parts = array.new<string>()
+    for [k, v] in items
+        int c = cnts.get(k)
+        parts.push(v == "" ? (c > 1 ? k + "×" + str.tostring(c) : k) : k + " " + v)
+    array.join(parts, " · ")
+
+// 显示用的上下沿：太薄的区按最小厚度撑开
+padded(Zone z) =>
+    float minH = minHeightInput * atrVal
+    float t = z.top
+    float b = z.bot
+    if t - b < minH
+        float mid = (t + b) / 2
+        t := mid + minH / 2
+        b := mid - minH / 2
+    [t, b]
+
+// ─────────────────────────────────────────────
+// 表格
+// ─────────────────────────────────────────────
+var table tbl = table.new(tablePosInput, 5, 60, border_width = 1)
+
+cell(int c, int r, string txt, color bg, color fg, string halign) =>
+    table.cell(tbl, c, r, txt, bgcolor = bg, text_color = fg, text_halign = halign, text_size = toSize(tableSizeInput))
+
+zoneRow(int r, string tag, Zone z) =>
+    int   side = zoneSide(z)
+    color bg   = color.new(zoneColor(side), 65)
+    float dist = side == 1 ? z.bot - close : side == -1 ? z.top - close : 0.0
+    cell(0, r, tag, bg, cellTextInput, text.align_center)
+    cell(1, r, z.top == z.bot ? fmtPrice(z.top) : fmtPrice(z.bot) + "–" + fmtPrice(z.top), bg, cellTextInput, text.align_right)
+    cell(2, r, str.tostring(z.strength, "0.#"), bg, cellTextInput, text.align_center)
+    cell(3, r, z.members, bg, cellTextInput, text.align_left)
+    cell(4, r, fmtAtr(dist, atrVal), bg, cellTextInput, text.align_right)
+
+priceRow(int r) =>
+    cell(0, r, "价格", headerBgInput, headerTextInput, text.align_center)
+    cell(1, r, fmtPrice(close), headerBgInput, headerTextInput, text.align_right)
+    cell(2, r, "", headerBgInput, headerTextInput, text.align_center)
+    cell(3, r, "", headerBgInput, headerTextInput, text.align_center)
+    cell(4, r, "", headerBgInput, headerTextInput, text.align_center)
+
+// ─────────────────────────────────────────────
+// 最后一根K线：收集价位 → 合并成区 → 排名 R/S → 画图 → 填表 → 警报
+// ─────────────────────────────────────────────
+var int dayStartBar = na
+if session.isfirstbar
+    dayStartBar := bar_index
+
+var array<box>   zoneBoxes = array.new<box>()
+var array<label> labels    = array.new<label>()
+
+if barstate.islast
+    for bx in zoneBoxes
+        box.delete(bx)
+    for lb in labels
+        label.delete(lb)
+    zoneBoxes.clear()
+    labels.clear()
+
+    // ── 收集所有来源的价位 ──
+    array<Lvl> lvs = array.new<Lvl>()
+    if useEmaInput
+        for i = 0 to 15
+            if ons.get(i)
+                int t = int(i / 4)
+                pushLvl(lvs, vals.get(i), tfNames.get(t), str.tostring(lens.get(i)), tfWs.get(t))
+    if usePivInput
+        for p in pivHs
+            pushLvl(lvs, p, "摆动高", "", pivWInput)
+        for p in pivLs
+            pushLvl(lvs, p, "摆动低", "", pivWInput)
+    if usePdInput and tfOk(true, "D")
+        pushLvl(lvs, pdH, "前日", "高", pdWInput)
+        pushLvl(lvs, pdL, "前日", "低", pdWInput)
+        if pdCloseInput
+            pushLvl(lvs, pdC, "前日", "收", pdWInput)
+    if usePwInput and tfOk(true, "W")
+        pushLvl(lvs, pwH, "前周", "高", pwWInput)
+        pushLvl(lvs, pwL, "前周", "低", pwWInput)
+    if usePmInput and tfOk(true, "M")
+        pushLvl(lvs, pmH, "前月", "高", pmWInput)
+        pushLvl(lvs, pmL, "前月", "低", pmWInput)
+
+    // ── 合并成区：从低到高，从区间最低点起 thr 以内的并入同一区 ──
+    array<float> lvVals = array.new<float>()
+    for L in lvs
+        lvVals.push(L.value)
+    array<int> ascIdx = lvVals.sort_indices(order.ascending)
+
+    float thr = mergeAtrInput * atrVal
+    array<Zone> zones = array.new<Zone>()
+    Zone cur = na
+    for j in ascIdx
+        Lvl L = lvs.get(j)
+        if na(cur) or L.value - cur.bot > thr
+            cur := Zone.new(L.value, L.value, 0.0, array.new<Lvl>(), "")
+            zones.push(cur)
+        cur.top      := L.value
+        cur.strength := cur.strength + L.weight
+        cur.lvls.push(L)
+    for z in zones
+        z.members := buildMembers(z)
+    int zc = zones.size()
+
+    // ── 排名：上方最近的为 R1、R2…，下方最近的为 S1、S2…（zones 为升序） ──
+    array<int> resIdx = array.new<int>()
+    array<int> supIdx = array.new<int>()
+    int inIdx = -1
+    if zc > 0
+        for i = 0 to zc - 1
+            Zone z = zones.get(i)
+            if z.strength >= minStrInput
+                if z.bot > close
+                    if maxEachInput == 0 or resIdx.size() < maxEachInput
+                        resIdx.push(i)
+                else if z.top >= close
+                    inIdx := i
+        for i = zc - 1 to 0
+            Zone z = zones.get(i)
+            if z.strength >= minStrInput and z.top < close
+                if maxEachInput == 0 or supIdx.size() < maxEachInput
+                    supIdx.push(i)
+
+    array<int>    selIdx = array.new<int>()
+    array<string> selTag = array.new<string>()
+    for [k, i] in resIdx
+        selIdx.push(i)
+        selTag.push("R" + str.tostring(k + 1))
+    if inIdx >= 0
+        selIdx.push(inIdx)
+        selTag.push("所在")
+    for [k, i] in supIdx
+        selIdx.push(i)
+        selTag.push("S" + str.tostring(k + 1))
+
+    // ── 画图 ──
+    int x1 = switch drawModeInput
+        "最后K线左移"   => bar_index - lineBackInput
+        "贯穿整个图表" => bar_index - lineBackInput
+        => nz(dayStartBar, bar_index)
+    int x2  = bar_index + labelOffsetInput
+    ext     = drawModeInput == "贯穿整个图表" ? extend.both : extend.right
+
+    for [k, i] in selIdx
+        Zone z = zones.get(i)
+        [pt, pb] = padded(z)
+        color c      = zoneColor(zoneSide(z))
+        int   transp = int(math.max(55, 85 - z.strength * 2.0))
+        zoneBoxes.push(box.new(x1, pt, x2, pb, border_color = color.new(c, 40), bgcolor = color.new(c, transp), extend = ext))
+        string txt = selTag.get(k) + "  " + str.tostring(z.strength, "0.#") + " · " + z.members
+        labels.push(label.new(x2, (pt + pb) / 2, txt, color = color.new(c, 25), textcolor = labelTextInput, style = label.style_label_left, size = toSize(labelSizeInput)))
+
+    // ── 表格：R3 → R1 → 价格 → S1 → S3 ──
+    table.clear(tbl, 0, 0, 4, 59)
+    if showTableInput
+        cell(0, 0, "",         headerBgInput, headerTextInput, text.align_center)
+        cell(1, 0, "区间",     headerBgInput, headerTextInput, text.align_center)
+        cell(2, 0, "强度",     headerBgInput, headerTextInput, text.align_center)
+        cell(3, 0, "来源",     headerBgInput, headerTextInput, text.align_center)
+        cell(4, 0, "距离 (ATR)", headerBgInput, headerTextInput, text.align_center)
+        int r = 1
+        int nRes = resIdx.size()
+        if nRes > 0
+            for k = nRes - 1 to 0
+                zoneRow(r, "R" + str.tostring(k + 1), zones.get(resIdx.get(k)))
+                r += 1
+        if inIdx >= 0
+            zoneRow(r, "所在", zones.get(inIdx))
+            r += 1
+        priceRow(r)
+        r += 1
+        for [k, i] in supIdx
+            zoneRow(r, "S" + str.tostring(k + 1), zones.get(i))
+            r += 1
+
+    // ── 警报：触及 / 突破 / 跌破强度足够的区（只在实时K线上触发） ──
+    if alertTouchInput or alertBreakInput
+        for z in zones
+            if z.strength >= alertMinInput
+                [pt, pb] = padded(z)
+                string info  = fmtPrice(pb) + "–" + fmtPrice(pt) + "  强度 " + str.tostring(z.strength, "0.#") + " · " + z.members
+                bool   nowIn  = close >= pb and close <= pt
+                bool   prevIn = close[1] >= pb and close[1] <= pt
+                if alertTouchInput and nowIn and not prevIn
+                    string kind = close[1] > pt ? "回落触及支撑 " : "上涨触及阻力 "
+                    alert(syminfo.ticker + " " + kind + info, alert.freq_once_per_bar)
+                if alertBreakInput and close > pt and close[1] <= pt
+                    alert(syminfo.ticker + " 突破阻力 " + info, alert.freq_once_per_bar_close)
+                if alertBreakInput and close < pb and close[1] >= pb
+                    alert(syminfo.ticker + " 跌破支撑 " + info, alert.freq_once_per_bar_close)
