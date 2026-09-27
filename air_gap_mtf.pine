@@ -16,6 +16,7 @@ G_TF2   = "周期 2"
 G_TF3   = "周期 3"
 G_TF4   = "周期 4"
 G_TABLE = "表格"
+G_GAP   = "最大空隙高亮"
 G_ALERT = "警报"
 
 PRICE_ROW = "── 当前价格 ──"
@@ -98,6 +99,17 @@ priceBgInput     = input.color(color.new(color.gray, 80), "价格行背景", gro
 priceTextInput   = input.color(color.white, "文字", group = G_TABLE, inline = "pr")
 atrTfInput       = input.timeframe("1D", "空隙单位 ATR 周期", group = G_TABLE, inline = "atr")
 atrLenInput      = input.int(14, "长度", minval = 1, group = G_TABLE, inline = "atr")
+
+// ─────────────────────────────────────────────
+// 最大空隙高亮
+// ─────────────────────────────────────────────
+gapModeInput     = input.string("全部中最大", "模式", options = ["关闭", "全部中最大", "上方、下方各一"], tooltip = "只比较相邻 EMA 之间的空隙。「上方、下方各一」按空隙中点在当前价之上还是之下分别找出最大的一段。", group = G_GAP)
+gapMinAtrInput   = input.float(0.0, "最小空隙 (ATR倍)", minval = 0, step = 0.1, tooltip = "小于此值的空隙不高亮，0 表示不限制", group = G_GAP)
+gapBoxColInput   = input.color(color.new(color.yellow, 82), "图表区域", group = G_GAP, inline = "gc")
+gapBorderInput   = input.color(color.new(color.yellow, 30), "边框", group = G_GAP, inline = "gc")
+gapTextColInput  = input.color(color.yellow, "文字", group = G_GAP, inline = "gc")
+gapCellColInput  = input.color(color.new(color.yellow, 0), "表格单元格", group = G_GAP, inline = "gt")
+gapCellTextInput = input.color(color.black, "文字", group = G_GAP, inline = "gt")
 
 // ─────────────────────────────────────────────
 // 警报设置
@@ -199,6 +211,46 @@ if alertOnInput and anyCross
 alertcondition(anyCross, "任一 EMA 穿越", "{{ticker}} 价格穿越了一条多周期 EMA")
 
 // ─────────────────────────────────────────────
+// 最大空隙：把启用的 EMA 从高到低排序，比较相邻两条之间的距离
+// A = 全部中最大 / 上方最大，B = 下方最大
+// ─────────────────────────────────────────────
+float gapTopA = na
+float gapBotA = na
+float gapTopB = na
+float gapBotB = na
+
+if barstate.islast and gapModeInput != "关闭"
+    array<float> sorted = array.new<float>()
+    for i = 0 to 15
+        float v = vals.get(i)
+        if ons.get(i) and not na(v)
+            sorted.push(v)
+    sorted.sort(order.descending)
+    float minGap = na(atrVal) ? 0.0 : gapMinAtrInput * atrVal
+    int m = sorted.size()
+    if m > 1
+        for i = 0 to m - 2
+            float top = sorted.get(i)
+            float bot = sorted.get(i + 1)
+            float g   = top - bot
+            if g > 0 and g >= minGap
+                if gapModeInput == "全部中最大" or (top + bot) / 2 > close
+                    if na(gapTopA) or g > gapTopA - gapBotA
+                        gapTopA := top
+                        gapBotA := bot
+                else
+                    if na(gapTopB) or g > gapTopB - gapBotB
+                        gapTopB := top
+                        gapBotB := bot
+
+// 表格里的一段 [lo, hi] 是否落在某个最大空隙内（当前价在空隙中间时，价格上下两段都会被标出）
+inMaxGap(float hi, float lo) =>
+    hi > lo and ((not na(gapTopA) and hi <= gapTopA and lo >= gapBotA) or (not na(gapTopB) and hi <= gapTopB and lo >= gapBotB))
+
+gapTitle(bool isA) =>
+    gapModeInput == "全部中最大" ? "★ 最大空隙" : isA ? "★ 上方最大空隙" : "★ 下方最大空隙"
+
+// ─────────────────────────────────────────────
 // 水平线 + 标签：只在最后一根K线上重建
 // ─────────────────────────────────────────────
 var int dayStartBar = na
@@ -212,14 +264,18 @@ lineStyle = switch lineStyleInput
 
 var array<line>  lines  = array.new<line>()
 var array<label> labels = array.new<label>()
+var array<box>   gapBoxes = array.new<box>()
 
 if barstate.islast
     for ln in lines
         line.delete(ln)
     for lb in labels
         label.delete(lb)
+    for bx in gapBoxes
+        box.delete(bx)
     lines.clear()
     labels.clear()
+    gapBoxes.clear()
 
     int x1 = switch drawModeInput
         "最后K线左移"   => bar_index - lineBackInput
@@ -237,6 +293,15 @@ if barstate.islast
             if showLabelsInput
                 string txt = labelPriceInput ? names.get(i) + "  " + str.tostring(v, format.mintick) : names.get(i)
                 labels.push(label.new(x2, v, txt, color = c, textcolor = labelTextInput, style = label.style_label_left, size = toSize(labelSizeInput)))
+
+    // 最大空隙区域：「贯穿」模式下 x1 只比最后K线早一根，放不下文字，改用左移K线数作为方框左边界
+    int boxLeft = drawModeInput == "贯穿整个图表" ? bar_index - lineBackInput : x1
+    if not na(gapTopA)
+        gapBoxes.push(box.new(boxLeft, gapTopA, x2, gapBotA, border_color = gapBorderInput, bgcolor = gapBoxColInput, extend = ext,
+             text = gapTitle(true) + "  " + fmtGap(gapTopA - gapBotA, atrVal), text_color = gapTextColInput, text_size = toSize(labelSizeInput), text_halign = text.align_center, text_valign = text.align_center))
+    if not na(gapTopB)
+        gapBoxes.push(box.new(boxLeft, gapTopB, x2, gapBotB, border_color = gapBorderInput, bgcolor = gapBoxColInput, extend = ext,
+             text = gapTitle(false) + "  " + fmtGap(gapTopB - gapBotB, atrVal), text_color = gapTextColInput, text_size = toSize(labelSizeInput), text_halign = text.align_center, text_valign = text.align_center))
 
 // ─────────────────────────────────────────────
 // 价格轴标记（plot 只能写在全局作用域）
@@ -262,13 +327,13 @@ plot(showAxisInput and ons.get(15) ? e44 : na, "TF4 EMA4", tf4Col, display = dis
 // 表格：均线 | 价格 | 差值 | 差值% | 空隙（与下一行的距离，附 ATR 倍数）
 // 底部汇总：最近阻力 / 最近支撑 / 上下空间比
 // ─────────────────────────────────────────────
-var table tbl = table.new(tablePosInput, 5, 22, border_width = 1)
+var table tbl = table.new(tablePosInput, 5, 24, border_width = 1)
 
 cell(int c, int r, string txt, color bg, color fg, string halign) =>
     table.cell(tbl, c, r, txt, bgcolor = bg, text_color = fg, text_halign = halign, text_size = toSize(tableSizeInput))
 
 if barstate.islast and showTableInput
-    table.clear(tbl, 0, 0, 4, 21)
+    table.clear(tbl, 0, 0, 4, 23)
     bool ordered = tableLayoutInput == "排序"
 
     array<Level> levels = array.new<Level>()
@@ -306,7 +371,8 @@ if barstate.islast and showTableInput
             cell(3, r, lv.isPrice ? "—" : str.tostring(diff / close * 100, "0.00") + "%", bg, lv.isPrice ? fg : dc, text.align_right)
             if ordered and i < n - 1
                 Level nx = levels.get(idx.get(i + 1))
-                cell(4, r, fmtGap(lv.value - nx.value, atrVal), bg, fg, text.align_right)
+                bool hit = inMaxGap(lv.value, nx.value)
+                cell(4, r, (hit ? "★ " : "") + fmtGap(lv.value - nx.value, atrVal), hit ? gapCellColInput : bg, hit ? gapCellTextInput : fg, text.align_right)
             else
                 cell(4, r, "", bg, fg, text.align_right)
             r += 1
@@ -344,3 +410,17 @@ if barstate.islast and showTableInput
     cell(2, r, "", headerBgInput, headerTextInput, text.align_right)
     cell(3, r, "", headerBgInput, headerTextInput, text.align_right)
     cell(4, r, "", headerBgInput, headerTextInput, text.align_right)
+    r += 1
+
+    // 最大空隙汇总行
+    for isA in array.from(true, false)
+        float top = isA ? gapTopA : gapTopB
+        float bot = isA ? gapBotA : gapBotB
+        if not na(top)
+            float g = top - bot
+            cell(0, r, gapTitle(isA), gapCellColInput, gapCellTextInput, text.align_left)
+            cell(1, r, str.tostring(top, format.mintick) + " → " + str.tostring(bot, format.mintick), gapCellColInput, gapCellTextInput, text.align_right)
+            cell(2, r, str.tostring(g, format.mintick), gapCellColInput, gapCellTextInput, text.align_right)
+            cell(3, r, str.tostring(g / close * 100, "0.00") + "%", gapCellColInput, gapCellTextInput, text.align_right)
+            cell(4, r, fmtGap(g, atrVal), gapCellColInput, gapCellTextInput, text.align_right)
+            r += 1
