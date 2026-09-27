@@ -77,15 +77,18 @@ float maSourceInput = input.source(close, "均线数据源", group = MA_SOURCE_G
 MaType maTypeInput   = input.enum(MaType.ema, "均线类型", group = MA_SOURCE_GROUP, display = display.none)
 
 // ─────────────────────────────────────────────
-// 输入：周期选择（每组一行：启用勾选框 + 周期下拉框）
+// 输入：周期选择（每组一行：启用勾选框 + 周期下拉框 + 品种）
 // ─────────────────────────────────────────────
 const string TIMEFRAME_GROUP = "周期选择"
 bool   tf1EnableInput    = input.bool(true, "周期组 1", inline = "tf1Row", group = TIMEFRAME_GROUP, display = display.none)
 string tf1TimeframeInput = input.timeframe("60", "", inline = "tf1Row", group = TIMEFRAME_GROUP, display = display.none)
+string tf1SymbolInput    = input.symbol("", "", tooltip = "留空 = 当前图表品种。\n填写其他品种（如 SPY、QQQ）时，该组按百分比缩放到当前价格附近显示：最新价对齐当前图表价格，涨跌幅与原品种一致；价格标签显示原品种的真实价格。", inline = "tf1Row", group = TIMEFRAME_GROUP, display = display.none)
 bool   tf2EnableInput    = input.bool(true, "周期组 2", inline = "tf2Row", group = TIMEFRAME_GROUP, display = display.none)
 string tf2TimeframeInput = input.timeframe("240", "", inline = "tf2Row", group = TIMEFRAME_GROUP, display = display.none)
+string tf2SymbolInput    = input.symbol("", "", tooltip = "留空 = 当前图表品种。\n填写其他品种（如 SPY、QQQ）时，该组按百分比缩放到当前价格附近显示：最新价对齐当前图表价格，涨跌幅与原品种一致；价格标签显示原品种的真实价格。", inline = "tf2Row", group = TIMEFRAME_GROUP, display = display.none)
 bool   tf3EnableInput    = input.bool(true, "周期组 3", inline = "tf3Row", group = TIMEFRAME_GROUP, display = display.none)
 string tf3TimeframeInput = input.timeframe("D", "", inline = "tf3Row", group = TIMEFRAME_GROUP, display = display.none)
+string tf3SymbolInput    = input.symbol("", "", tooltip = "留空 = 当前图表品种。\n填写其他品种（如 SPY、QQQ）时，该组按百分比缩放到当前价格附近显示：最新价对齐当前图表价格，涨跌幅与原品种一致；价格标签显示原品种的真实价格。", inline = "tf3Row", group = TIMEFRAME_GROUP, display = display.none)
 
 // ─────────────────────────────────────────────
 // 输入：全局设置（三组共用）
@@ -259,6 +262,8 @@ type TfGroup
     bool             uniformColor       // 统一颜色显示（已与总开关合并）
     bool             showCloudLine      // 显示云图边界线
     array<CloudSpec> clouds             // 5 条云图的显示设置
+    string           symbolName         // 标题里显示的品种代码
+    bool             isOtherSymbol      // 是否为其他品种（需要按百分比缩放）
 
 // ─────────────────────────────────────────────
 // 工具函数
@@ -307,6 +312,18 @@ movingAverage(float src, simple int length, simple MaType maType) =>
         MaType.rma  => ta.rma(src, length)
         MaType.vwma => ta.vwma(src, length)
 
+// 把一组数据里的全部价格乘以同一个系数（na 保持 na），用于把其他品种缩放到当前图表价格附近
+scaleValues(array<float> values, float factor) =>
+    array<float> scaled = array.new<float>(values.size(), na)
+    for [i, v] in values
+        scaled.set(i, v * factor)
+    scaled
+
+// 品种代码去掉交易所前缀，比如 "AMEX:SPY" → "SPY"
+symbolShortName(string symbol) =>
+    array<string> parts = str.split(symbol, ":")
+    parts.size() > 0 ? parts.last() : symbol
+
 // 判断取回的K线数据是否无效：实时K线的开高低收任意一个为 na 即视为取数失败
 isDataInvalid(array<float> ohlcData) =>
     na(ohlcData.get(0)) or na(ohlcData.get(1)) or na(ohlcData.get(2)) or na(ohlcData.get(3))
@@ -352,13 +369,13 @@ htfGroupValues(simple bool show1, simple int fast1, simple int slow1, simple boo
 // 每组只发起 1 次跨周期请求（K线与 5 条云图合并在一起），三组最多 3 次
 // 交易时段由 sessionTickerFor 决定（见"按周期固定交易时段"）
 // enabled 为 false 时不发起请求，直接返回全 na 占位数组；showN 为 false 的云图不计算均线
-// 按周期选择请求用的品种代码：日线及以上用常规时段，日内周期用含盘前盘后的时段；开关关闭时跟随图表
-sessionTickerFor(simple string tf) =>
+// 按周期选择请求用的品种代码：日线及以上用常规时段，日内周期用含盘前盘后的时段；开关关闭时不修改
+sessionTickerFor(simple string symbol, simple string tf) =>
     bool isDailyOrAbove = timeframe.in_seconds(tf) >= 86400
-    fixSessionByTfInput ? ticker.modify(syminfo.tickerid, session = isDailyOrAbove ? session.regular : session.extended) : syminfo.tickerid
+    fixSessionByTfInput ? ticker.modify(symbol, session = isDailyOrAbove ? session.regular : session.extended) : symbol
 
-fetchHtfGroup(bool enabled, simple string tf, simple bool show1, simple int fast1, simple int slow1, simple bool show2, simple int fast2, simple int slow2, simple bool show3, simple int fast3, simple int slow3, simple bool show4, simple int fast4, simple int slow4, simple bool show5, simple int fast5, simple int slow5) =>
-    enabled ? request.security(sessionTickerFor(tf), tf, htfGroupValues(show1, fast1, slow1, show2, fast2, slow2, show3, fast3, slow3, show4, fast4, slow4, show5, fast5, slow5)) : array.new<float>(GROUP_DATA_SIZE, na)
+fetchHtfGroup(bool enabled, simple string symbol, simple string tf, simple bool show1, simple int fast1, simple int slow1, simple bool show2, simple int fast2, simple int slow2, simple bool show3, simple int fast3, simple int slow3, simple bool show4, simple int fast4, simple int slow4, simple bool show5, simple int fast5, simple int slow5) =>
+    enabled ? request.security(sessionTickerFor(symbol, tf), tf, htfGroupValues(show1, fast1, slow1, show2, fast2, slow2, show3, fast3, slow3, show4, fast4, slow4, show5, fast5, slow5)) : array.new<float>(GROUP_DATA_SIZE, na)
 
 // 分组周期必须 ≥ 图表周期：小于图表周期时 request.security 只能取到每根图表K线里最后一根小周期K线，
 // 投影出来的形状看似正常其实是错的，所以直接不取数，改为显示提示
@@ -369,19 +386,28 @@ bool tf1Active = showAllInput and tf1EnableInput and isTf1HigherThanChart
 bool tf2Active = showAllInput and tf2EnableInput and isTf2HigherThanChart
 bool tf3Active = showAllInput and tf3EnableInput and isTf3HigherThanChart
 
-array<float> tf1Data = fetchHtfGroup(tf1Active, tf1TimeframeInput,
+// 各组请求的品种：留空时用当前图表品种（沿用图表的交易时段设置）
+string chartSymbol = syminfo.prefix + ":" + syminfo.ticker
+string tf1Symbol   = tf1SymbolInput == "" ? syminfo.tickerid : tf1SymbolInput
+string tf2Symbol   = tf2SymbolInput == "" ? syminfo.tickerid : tf2SymbolInput
+string tf3Symbol   = tf3SymbolInput == "" ? syminfo.tickerid : tf3SymbolInput
+bool   isTf1Other  = tf1SymbolInput != "" and tf1SymbolInput != chartSymbol
+bool   isTf2Other  = tf2SymbolInput != "" and tf2SymbolInput != chartSymbol
+bool   isTf3Other  = tf3SymbolInput != "" and tf3SymbolInput != chartSymbol
+
+array<float> tf1Data = fetchHtfGroup(tf1Active, tf1Symbol, tf1TimeframeInput,
      tf1ShowCloudInput and tf1Cloud1ShowInput, tf1Cloud1FastLenInput, tf1Cloud1SlowLenInput,
      tf1ShowCloudInput and tf1Cloud2ShowInput, tf1Cloud2FastLenInput, tf1Cloud2SlowLenInput,
      tf1ShowCloudInput and tf1Cloud3ShowInput, tf1Cloud3FastLenInput, tf1Cloud3SlowLenInput,
      tf1ShowCloudInput and tf1Cloud4ShowInput, tf1Cloud4FastLenInput, tf1Cloud4SlowLenInput,
      tf1ShowCloudInput and tf1Cloud5ShowInput, tf1Cloud5FastLenInput, tf1Cloud5SlowLenInput)
-array<float> tf2Data = fetchHtfGroup(tf2Active, tf2TimeframeInput,
+array<float> tf2Data = fetchHtfGroup(tf2Active, tf2Symbol, tf2TimeframeInput,
      tf2ShowCloudInput and tf2Cloud1ShowInput, tf2Cloud1FastLenInput, tf2Cloud1SlowLenInput,
      tf2ShowCloudInput and tf2Cloud2ShowInput, tf2Cloud2FastLenInput, tf2Cloud2SlowLenInput,
      tf2ShowCloudInput and tf2Cloud3ShowInput, tf2Cloud3FastLenInput, tf2Cloud3SlowLenInput,
      tf2ShowCloudInput and tf2Cloud4ShowInput, tf2Cloud4FastLenInput, tf2Cloud4SlowLenInput,
      tf2ShowCloudInput and tf2Cloud5ShowInput, tf2Cloud5FastLenInput, tf2Cloud5SlowLenInput)
-array<float> tf3Data = fetchHtfGroup(tf3Active, tf3TimeframeInput,
+array<float> tf3Data = fetchHtfGroup(tf3Active, tf3Symbol, tf3TimeframeInput,
      tf3ShowCloudInput and tf3Cloud1ShowInput, tf3Cloud1FastLenInput, tf3Cloud1SlowLenInput,
      tf3ShowCloudInput and tf3Cloud2ShowInput, tf3Cloud2FastLenInput, tf3Cloud2SlowLenInput,
      tf3ShowCloudInput and tf3Cloud3ShowInput, tf3Cloud3FastLenInput, tf3Cloud3SlowLenInput,
@@ -498,7 +524,7 @@ method hideAll(GroupDrawings this) =>
 
 // 更新一组K线（实体 + 影线），实时K线可附带虚线连接线与价格标签，最后在实时K线上方显示标题标签
 // uniformColor：true = 同一涨跌方向的K线颜色完全一致；false = 历史K线偏淡、实时K线更实
-drawCandles(GroupDrawings d, array<float> ohlcData, string tfText, int count, array<int> startXs, array<int> endXs, array<int> midXs, bool showLabels, bool showLines, bool showTitleLabel, bool uniformColor) =>
+drawCandles(GroupDrawings d, array<float> ohlcData, string titleText, float priceScale, int count, array<int> startXs, array<int> endXs, array<int> midXs, bool showLabels, bool showLines, bool showTitleLabel, bool uniformColor) =>
     int   liveMidX = na  // 实时K线中点横坐标，用于定位标题标签
     float liveHigh = na  // 实时K线最高价，用于定位标题标签
 
@@ -546,7 +572,7 @@ drawCandles(GroupDrawings d, array<float> ohlcData, string tfText, int count, ar
                         dashLine.set_xy2(endPts.get(i), prices.get(i))
                         dashLine.set_color(colors.get(i))
 
-                // 价格标签：显示在实时K线右侧
+                // 价格标签：显示在实时K线右侧（除以缩放系数，显示原品种的真实价格）
                 if showLabels
                     array<float>  prices = array.from(o, h, l, c)
                     array<string> names  = array.from("开盘", "最高", "最低", "收盘")
@@ -554,14 +580,14 @@ drawCandles(GroupDrawings d, array<float> ohlcData, string tfText, int count, ar
                     for i = 0 to 3
                         label priceLabel = d.priceLabels.get(i)
                         priceLabel.set_xy(endX + 1, prices.get(i))
-                        priceLabel.set_text(names.get(i) + ": " + str.tostring(prices.get(i), format.mintick))
+                        priceLabel.set_text(names.get(i) + ": " + str.tostring(prices.get(i) / priceScale, format.mintick))
                         priceLabel.set_textcolor(colors.get(i))
 
     // 标题标签（品种代码 + 周期）：贴在实时K线正上方，间距按价格的0.4%计算，避免高周期振幅大时被推出屏幕
     if showTitleLabel and not na(liveMidX)
         float padding = liveHigh > 0 ? liveHigh * 0.004 : syminfo.mintick * 50
         d.titleLabel.set_xy(liveMidX, liveHigh + padding)
-        d.titleLabel.set_text(syminfo.ticker + "\n(" + tfText + ")")
+        d.titleLabel.set_text(titleText)
         d.titleLabel.set_color(titleLabelBgColorInput)
         d.titleLabel.set_textcolor(titleLabelTextColorInput)
         d.titleLabel.set_style(toLabelStyle(titleLabelStyleInput))
@@ -603,15 +629,21 @@ drawWarning(GroupDrawings d, int groupNo, string message, int x) =>
 drawTimeframeGroup(GroupDrawings d, TfGroup g, int liveAnchor) =>
     [startXs, endXs, midXs] = calcGroupPositions(g.count, liveAnchor, g.width, g.gap)
 
+    // 其他品种按百分比缩放：系数 = 当前图表价格 / 该品种最新价，K线和云图同比例缩放
+    float liveClose  = g.data.get(3)
+    float priceScale = g.isOtherSymbol and not na(liveClose) and liveClose != 0 ? close / liveClose : 1.0
+    array<float> values = priceScale == 1.0 ? g.data : scaleValues(g.data, priceScale)
+
     for [k, spec] in g.clouds
         if spec.show
-            drawCloud(d, k, spec, cloudSlice(g.data, k), midXs, g.count, g.showCloudLine)
+            drawCloud(d, k, spec, cloudSlice(values, k), midXs, g.count, g.showCloudLine)
 
-    array<float> ohlcData = g.data.slice(0, OHLC_SIZE)
-    drawCandles(d, ohlcData, timeframeText(g.tf), g.count, startXs, endXs, midXs, g.showLabels, g.showLines, g.showTitleLabel, g.uniformColor)
+    array<float> ohlcData  = values.slice(0, OHLC_SIZE)
+    string       titleText = g.symbolName + "\n(" + timeframeText(g.tf) + ")" + (g.isOtherSymbol ? "\n按百分比缩放" : "")
+    drawCandles(d, ohlcData, titleText, priceScale, g.count, startXs, endXs, midXs, g.showLabels, g.showLines, g.showTitleLabel, g.uniformColor)
 
     if isDataInvalid(ohlcData)
-        drawWarning(d, g.groupNo, "取数失败\n周期: " + g.tf, liveAnchor)
+        drawWarning(d, g.groupNo, "取数失败\n品种: " + g.symbolName + "  周期: " + g.tf, liveAnchor)
 
 // ─────────────────────────────────────────────
 // 主流程 —— 只在最后一根K线上更新
@@ -632,17 +664,20 @@ if barstate.islast
                   masterLabelsInput and tf1ShowLabelsInput, masterLinesInput and tf1ShowLinesInput, masterTitleLabelInput and tf1ShowTitleLabelInput,
                   masterUniformColorInput and tf1UniformColorInput, tf1ShowCloudLineInput,
                   buildClouds(tf1ShowCloudInput, tf1Cloud1ShowInput, tf1Cloud1BullColorInput, tf1Cloud2ShowInput, tf1Cloud2BullColorInput,
-                       tf1Cloud3ShowInput, tf1Cloud3BullColorInput, tf1Cloud4ShowInput, tf1Cloud4BullColorInput, tf1Cloud5ShowInput, tf1Cloud5BullColorInput)),
+                       tf1Cloud3ShowInput, tf1Cloud3BullColorInput, tf1Cloud4ShowInput, tf1Cloud4BullColorInput, tf1Cloud5ShowInput, tf1Cloud5BullColorInput),
+                  isTf1Other ? symbolShortName(tf1SymbolInput) : syminfo.ticker, isTf1Other),
              TfGroup.new(2, tf2EnableInput, tf2TimeframeInput, isTf2HigherThanChart, tf2Data, tf2CountInput, tf2WidthInput, tf2GapInput, tf2GroupGapInput,
                   masterLabelsInput and tf2ShowLabelsInput, masterLinesInput and tf2ShowLinesInput, masterTitleLabelInput and tf2ShowTitleLabelInput,
                   masterUniformColorInput and tf2UniformColorInput, tf2ShowCloudLineInput,
                   buildClouds(tf2ShowCloudInput, tf2Cloud1ShowInput, tf2Cloud1BullColorInput, tf2Cloud2ShowInput, tf2Cloud2BullColorInput,
-                       tf2Cloud3ShowInput, tf2Cloud3BullColorInput, tf2Cloud4ShowInput, tf2Cloud4BullColorInput, tf2Cloud5ShowInput, tf2Cloud5BullColorInput)),
+                       tf2Cloud3ShowInput, tf2Cloud3BullColorInput, tf2Cloud4ShowInput, tf2Cloud4BullColorInput, tf2Cloud5ShowInput, tf2Cloud5BullColorInput),
+                  isTf2Other ? symbolShortName(tf2SymbolInput) : syminfo.ticker, isTf2Other),
              TfGroup.new(3, tf3EnableInput, tf3TimeframeInput, isTf3HigherThanChart, tf3Data, tf3CountInput, tf3WidthInput, tf3GapInput, 0,
                   masterLabelsInput and tf3ShowLabelsInput, masterLinesInput and tf3ShowLinesInput, masterTitleLabelInput and tf3ShowTitleLabelInput,
                   masterUniformColorInput and tf3UniformColorInput, tf3ShowCloudLineInput,
                   buildClouds(tf3ShowCloudInput, tf3Cloud1ShowInput, tf3Cloud1BullColorInput, tf3Cloud2ShowInput, tf3Cloud2BullColorInput,
-                       tf3Cloud3ShowInput, tf3Cloud3BullColorInput, tf3Cloud4ShowInput, tf3Cloud4BullColorInput, tf3Cloud5ShowInput, tf3Cloud5BullColorInput)))
+                       tf3Cloud3ShowInput, tf3Cloud3BullColorInput, tf3Cloud4ShowInput, tf3Cloud4BullColorInput, tf3Cloud5ShowInput, tf3Cloud5BullColorInput),
+                  isTf3Other ? symbolShortName(tf3SymbolInput) : syminfo.ticker, isTf3Other))
 
         // 各组实时K线锚点：只给启用的组排位置（关掉的组不占空位）
         // 第一个启用的组锚在"最新K线 + 右侧偏移"；后面的组 = 上一组右边缘 + 上一组的组间距 + 本组向左展开的宽度
