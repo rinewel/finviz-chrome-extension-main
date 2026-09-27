@@ -273,17 +273,21 @@ isDataInvalid(array<float> ohlcData) =>
 // ─────────────────────────────────────────────
 
 // 在被请求的周期上计算一条云图的快慢均线，返回最近10根的值（共20个：0~9快线，10~19慢线）
-cloudSeries(int fastLen, int slowLen) =>
-    float fastMa = movingAverage(maSourceInput, fastLen, maTypeInput)
-    float slowMa = movingAverage(maSourceInput, slowLen, maTypeInput)
-    array.from(
-         fastMa, fastMa[1], fastMa[2], fastMa[3], fastMa[4], fastMa[5], fastMa[6], fastMa[7], fastMa[8], fastMa[9],
-         slowMa, slowMa[1], slowMa[2], slowMa[3], slowMa[4], slowMa[5], slowMa[6], slowMa[7], slowMa[8], slowMa[9])
+// 不显示的云图不计算均线，直接返回全 na（isShown 来自输入，整段历史中不会变化，所以条件计算是安全的）
+cloudSeries(bool isShown, int fastLen, int slowLen) =>
+    array<float> values = array.new<float>(CLOUD_SIZE, na)
+    if isShown
+        float fastMa = movingAverage(maSourceInput, fastLen, maTypeInput)
+        float slowMa = movingAverage(maSourceInput, slowLen, maTypeInput)
+        values := array.from(
+             fastMa, fastMa[1], fastMa[2], fastMa[3], fastMa[4], fastMa[5], fastMa[6], fastMa[7], fastMa[8], fastMa[9],
+             slowMa, slowMa[1], slowMa[2], slowMa[3], slowMa[4], slowMa[5], slowMa[6], slowMa[7], slowMa[8], slowMa[9])
+    values
 
 // 在被请求的周期上一次算完一组所需的全部数据（布局见常量 GROUP_DATA_SIZE）：
 // 最近10根K线的开高低收（偏移量*4 + 0/1/2/3 = 开/高/低/收；偏移量0 = 实时K线）+ 5条云图的快慢均线
 // 均线在这里计算、整体作为 request.security 的表达式，确保均线是在高周期上计算的
-htfGroupValues(int fast1, int slow1, int fast2, int slow2, int fast3, int slow3, int fast4, int slow4, int fast5, int slow5) =>
+htfGroupValues(bool show1, int fast1, int slow1, bool show2, int fast2, int slow2, bool show3, int fast3, int slow3, bool show4, int fast4, int slow4, bool show5, int fast5, int slow5) =>
     array<float> data = array.from(
          open,    high,    low,    close,
          open[1], high[1], low[1], close[1],
@@ -295,18 +299,18 @@ htfGroupValues(int fast1, int slow1, int fast2, int slow2, int fast3, int slow3,
          open[7], high[7], low[7], close[7],
          open[8], high[8], low[8], close[8],
          open[9], high[9], low[9], close[9])
-    data.concat(cloudSeries(fast1, slow1))
-    data.concat(cloudSeries(fast2, slow2))
-    data.concat(cloudSeries(fast3, slow3))
-    data.concat(cloudSeries(fast4, slow4))
-    data.concat(cloudSeries(fast5, slow5))
+    data.concat(cloudSeries(show1, fast1, slow1))
+    data.concat(cloudSeries(show2, fast2, slow2))
+    data.concat(cloudSeries(show3, fast3, slow3))
+    data.concat(cloudSeries(show4, fast4, slow4))
+    data.concat(cloudSeries(show5, fast5, slow5))
     data
 
 // 每组只发起 1 次跨周期请求（K线与 5 条云图合并在一起），三组最多 3 次
 // 数据沿用图表的交易时段设置：图表开了盘前盘后时，1H/4H 也会包含盘前盘后
-// enabled 为 false 时不发起请求，直接返回全 na 占位数组
-fetchHtfGroup(bool enabled, string tf, int fast1, int slow1, int fast2, int slow2, int fast3, int slow3, int fast4, int slow4, int fast5, int slow5) =>
-    enabled ? request.security(syminfo.tickerid, tf, htfGroupValues(fast1, slow1, fast2, slow2, fast3, slow3, fast4, slow4, fast5, slow5)) : array.new<float>(GROUP_DATA_SIZE, na)
+// enabled 为 false 时不发起请求，直接返回全 na 占位数组；showN 为 false 的云图不计算均线
+fetchHtfGroup(bool enabled, string tf, bool show1, int fast1, int slow1, bool show2, int fast2, int slow2, bool show3, int fast3, int slow3, bool show4, int fast4, int slow4, bool show5, int fast5, int slow5) =>
+    enabled ? request.security(syminfo.tickerid, tf, htfGroupValues(show1, fast1, slow1, show2, fast2, slow2, show3, fast3, slow3, show4, fast4, slow4, show5, fast5, slow5)) : array.new<float>(GROUP_DATA_SIZE, na)
 
 // 分组周期必须 ≥ 图表周期：小于图表周期时 request.security 只能取到每根图表K线里最后一根小周期K线，
 // 投影出来的形状看似正常其实是错的，所以直接不取数，改为显示提示
@@ -318,14 +322,23 @@ bool tf2Active = showAllInput and tf2EnableInput and isTf2HigherThanChart
 bool tf3Active = showAllInput and tf3EnableInput and isTf3HigherThanChart
 
 array<float> tf1Data = fetchHtfGroup(tf1Active, tf1TimeframeInput,
-     tf1Cloud1FastLenInput, tf1Cloud1SlowLenInput, tf1Cloud2FastLenInput, tf1Cloud2SlowLenInput, tf1Cloud3FastLenInput, tf1Cloud3SlowLenInput,
-     tf1Cloud4FastLenInput, tf1Cloud4SlowLenInput, tf1Cloud5FastLenInput, tf1Cloud5SlowLenInput)
+     tf1ShowCloudInput and tf1Cloud1ShowInput, tf1Cloud1FastLenInput, tf1Cloud1SlowLenInput,
+     tf1ShowCloudInput and tf1Cloud2ShowInput, tf1Cloud2FastLenInput, tf1Cloud2SlowLenInput,
+     tf1ShowCloudInput and tf1Cloud3ShowInput, tf1Cloud3FastLenInput, tf1Cloud3SlowLenInput,
+     tf1ShowCloudInput and tf1Cloud4ShowInput, tf1Cloud4FastLenInput, tf1Cloud4SlowLenInput,
+     tf1ShowCloudInput and tf1Cloud5ShowInput, tf1Cloud5FastLenInput, tf1Cloud5SlowLenInput)
 array<float> tf2Data = fetchHtfGroup(tf2Active, tf2TimeframeInput,
-     tf2Cloud1FastLenInput, tf2Cloud1SlowLenInput, tf2Cloud2FastLenInput, tf2Cloud2SlowLenInput, tf2Cloud3FastLenInput, tf2Cloud3SlowLenInput,
-     tf2Cloud4FastLenInput, tf2Cloud4SlowLenInput, tf2Cloud5FastLenInput, tf2Cloud5SlowLenInput)
+     tf2ShowCloudInput and tf2Cloud1ShowInput, tf2Cloud1FastLenInput, tf2Cloud1SlowLenInput,
+     tf2ShowCloudInput and tf2Cloud2ShowInput, tf2Cloud2FastLenInput, tf2Cloud2SlowLenInput,
+     tf2ShowCloudInput and tf2Cloud3ShowInput, tf2Cloud3FastLenInput, tf2Cloud3SlowLenInput,
+     tf2ShowCloudInput and tf2Cloud4ShowInput, tf2Cloud4FastLenInput, tf2Cloud4SlowLenInput,
+     tf2ShowCloudInput and tf2Cloud5ShowInput, tf2Cloud5FastLenInput, tf2Cloud5SlowLenInput)
 array<float> tf3Data = fetchHtfGroup(tf3Active, tf3TimeframeInput,
-     tf3Cloud1FastLenInput, tf3Cloud1SlowLenInput, tf3Cloud2FastLenInput, tf3Cloud2SlowLenInput, tf3Cloud3FastLenInput, tf3Cloud3SlowLenInput,
-     tf3Cloud4FastLenInput, tf3Cloud4SlowLenInput, tf3Cloud5FastLenInput, tf3Cloud5SlowLenInput)
+     tf3ShowCloudInput and tf3Cloud1ShowInput, tf3Cloud1FastLenInput, tf3Cloud1SlowLenInput,
+     tf3ShowCloudInput and tf3Cloud2ShowInput, tf3Cloud2FastLenInput, tf3Cloud2SlowLenInput,
+     tf3ShowCloudInput and tf3Cloud3ShowInput, tf3Cloud3FastLenInput, tf3Cloud3SlowLenInput,
+     tf3ShowCloudInput and tf3Cloud4ShowInput, tf3Cloud4FastLenInput, tf3Cloud4SlowLenInput,
+     tf3ShowCloudInput and tf3Cloud5ShowInput, tf3Cloud5FastLenInput, tf3Cloud5SlowLenInput)
 
 // 从一组数据中切出第 k 条云图（k 从 0 开始）的快慢线
 cloudSlice(array<float> groupData, int k) =>
@@ -363,12 +376,81 @@ calcGroupPositions(int count, int liveAnchor, int candleWidth, int candleGap) =>
     [startXs, endXs, midXs]
 
 // ─────────────────────────────────────────────
-// 绘制函数
+// 绘图对象池
+// 每组的图形只创建一次，之后每次刷新只用 set_* 更新位置、文字和颜色，用不到的设为透明
+// 避免每个报价都删除并重建几百个线、填充、框和标签
+// ─────────────────────────────────────────────
+const int SEGMENT_COUNT    = HTF_BAR_COUNT - 1               // 每条云图最多的线段数（相邻两根K线之间一段）
+const int CLOUD_LINE_COUNT = CLOUD_COUNT * SEGMENT_COUNT     // 每组云图线段总数
+
+type GroupDrawings
+    array<line>     wicks           // 影线，下标 = 从左到右第几根K线
+    array<box>      bodies          // 实体，下标同上
+    array<line>     dashLines       // 实时K线的开/高/低/收虚线连接线
+    array<label>    priceLabels     // 实时K线的开/高/低/收价格标签
+    label           titleLabel      // 标题标签（品种代码 + 周期）
+    label           warningLabel    // 诊断提示标签
+    array<line>     cloudFastLines  // 云图快线段，下标 = 云图序号 * SEGMENT_COUNT + 段序号
+    array<line>     cloudSlowLines  // 云图慢线段，下标同上
+    array<linefill> cloudFills      // 快慢线段之间的填充，下标同上
+
+newHiddenLine(int width) =>
+    line.new(bar_index, close, bar_index, close, color = TRANSPARENT, width = width)
+
+newHiddenLabel(string style, string textSize) =>
+    label.new(bar_index, close, "", color = TRANSPARENT, textcolor = TRANSPARENT, style = style, size = textSize)
+
+newGroupDrawings() =>
+    GroupDrawings g = GroupDrawings.new(array.new<line>(), array.new<box>(), array.new<line>(), array.new<label>(),
+         newHiddenLabel(label.style_label_down, size.normal), newHiddenLabel(label.style_label_left, size.normal),
+         array.new<line>(), array.new<line>(), array.new<linefill>())
+    // 先创建云图，再创建K线：后创建的图形显示在上层
+    for i = 0 to CLOUD_LINE_COUNT - 1
+        line fastLine = newHiddenLine(1)
+        line slowLine = newHiddenLine(2)
+        g.cloudFastLines.push(fastLine)
+        g.cloudSlowLines.push(slowLine)
+        g.cloudFills.push(linefill.new(fastLine, slowLine, TRANSPARENT))
+    for i = 0 to HTF_BAR_COUNT - 1
+        g.wicks.push(newHiddenLine(2))
+        g.bodies.push(box.new(bar_index, close, bar_index, close, border_color = TRANSPARENT, bgcolor = TRANSPARENT))
+    for i = 0 to 3
+        line dashLine = newHiddenLine(1)
+        dashLine.set_style(line.style_dashed)
+        g.dashLines.push(dashLine)
+        g.priceLabels.push(newHiddenLabel(label.style_label_left, size.small))
+    g
+
+// 隐藏本组全部图形（每次刷新先全部隐藏，再只显示用到的）
+method hideAll(GroupDrawings this) =>
+    for ln in this.wicks
+        ln.set_color(TRANSPARENT)
+    for bx in this.bodies
+        bx.set_bgcolor(TRANSPARENT)
+        bx.set_border_color(TRANSPARENT)
+    for ln in this.dashLines
+        ln.set_color(TRANSPARENT)
+    for lb in this.priceLabels
+        lb.set_text("")
+    this.titleLabel.set_text("")
+    this.titleLabel.set_color(TRANSPARENT)
+    this.warningLabel.set_text("")
+    this.warningLabel.set_color(TRANSPARENT)
+    for ln in this.cloudFastLines
+        ln.set_color(TRANSPARENT)
+    for ln in this.cloudSlowLines
+        ln.set_color(TRANSPARENT)
+    for lf in this.cloudFills
+        lf.set_color(TRANSPARENT)
+    this
+
+// ─────────────────────────────────────────────
+// 绘制函数（全部是更新已有对象）
 // ─────────────────────────────────────────────
 
-// 绘制一组K线（实体 + 影线），实时K线可附带虚线连接线与价格标签，最后在实时K线上方画标题标签
+// 更新一组K线（实体 + 影线），实时K线可附带虚线连接线与价格标签，最后在实时K线上方显示标题标签
 // uniformColor：true = 同一涨跌方向的K线颜色完全一致；false = 历史K线偏淡、实时K线更实
-drawCandles(array<float> ohlcData, string tfText, int count, array<int> startXs, array<int> endXs, array<int> midXs, bool showLabels, bool showLines, bool showTitleLabel, bool uniformColor) =>
+drawCandles(GroupDrawings g, array<float> ohlcData, string tfText, int count, array<int> startXs, array<int> endXs, array<int> midXs, bool showLabels, bool showLines, bool showTitleLabel, bool uniformColor) =>
     int   liveMidX = na  // 实时K线中点横坐标，用于定位标题标签
     float liveHigh = na  // 实时K线最高价，用于定位标题标签
 
@@ -390,8 +472,16 @@ drawCandles(array<float> ohlcData, string tfText, int count, array<int> startXs,
             color wickColor = uniformColor or isLive ? baseColor : color.new(baseColor, HIST_WICK_TRANS)
             int   bodyTrans = uniformColor ? 0 : isLive ? liveBodyTransInput : HIST_BODY_TRANS
 
-            line.new(midX, h, midX, l, color = wickColor, width = 2)
-            box.new(startX, math.max(o, c), endX, math.min(o, c), border_color = wickColor, bgcolor = color.new(baseColor, bodyTrans))
+            line wick = g.wicks.get(p)
+            wick.set_xy1(midX, h)
+            wick.set_xy2(midX, l)
+            wick.set_color(wickColor)
+
+            box body = g.bodies.get(p)
+            body.set_lefttop(startX, math.max(o, c))
+            body.set_rightbottom(endX, math.min(o, c))
+            body.set_border_color(wickColor)
+            body.set_bgcolor(color.new(baseColor, bodyTrans))
 
             if isLive
                 liveMidX := midX
@@ -399,29 +489,41 @@ drawCandles(array<float> ohlcData, string tfText, int count, array<int> startXs,
 
                 // 虚线：从图表最新K线连到投影的实时K线开高低收
                 if showLines
-                    line.new(bar_index, o, startX, o, color = NEUTRAL_COLOR, style = line.style_dashed)
-                    line.new(bar_index, h, midX, h, color = bullColorInput, style = line.style_dashed)
-                    line.new(bar_index, l, midX, l, color = bearColorInput, style = line.style_dashed)
-                    line.new(bar_index, c, endX, c, color = baseColor, style = line.style_dashed)
+                    array<float> prices = array.from(o, h, l, c)
+                    array<int>   endPts = array.from(startX, midX, midX, endX)
+                    array<color> colors = array.from(NEUTRAL_COLOR, bullColorInput, bearColorInput, baseColor)
+                    for i = 0 to 3
+                        line dashLine = g.dashLines.get(i)
+                        dashLine.set_xy1(bar_index, prices.get(i))
+                        dashLine.set_xy2(endPts.get(i), prices.get(i))
+                        dashLine.set_color(colors.get(i))
 
                 // 价格标签：显示在实时K线右侧
                 if showLabels
-                    int labelX = endX + 1
-                    label.new(labelX, o, "开盘: " + str.tostring(o, format.mintick), color = TRANSPARENT, textcolor = NEUTRAL_COLOR, style = label.style_label_left, size = size.small)
-                    label.new(labelX, h, "最高: " + str.tostring(h, format.mintick), color = TRANSPARENT, textcolor = bullColorInput, style = label.style_label_left, size = size.small)
-                    label.new(labelX, l, "最低: " + str.tostring(l, format.mintick), color = TRANSPARENT, textcolor = bearColorInput, style = label.style_label_left, size = size.small)
-                    label.new(labelX, c, "收盘: " + str.tostring(c, format.mintick), color = TRANSPARENT, textcolor = baseColor, style = label.style_label_left, size = size.small)
+                    array<float>  prices = array.from(o, h, l, c)
+                    array<string> names  = array.from("开盘", "最高", "最低", "收盘")
+                    array<color>  colors = array.from(NEUTRAL_COLOR, bullColorInput, bearColorInput, baseColor)
+                    for i = 0 to 3
+                        label priceLabel = g.priceLabels.get(i)
+                        priceLabel.set_xy(endX + 1, prices.get(i))
+                        priceLabel.set_text(names.get(i) + ": " + str.tostring(prices.get(i), format.mintick))
+                        priceLabel.set_textcolor(colors.get(i))
 
     // 标题标签（品种代码 + 周期）：贴在实时K线正上方，间距按价格的0.4%计算，避免高周期振幅大时被推出屏幕
     if showTitleLabel and not na(liveMidX)
         float padding = liveHigh > 0 ? liveHigh * 0.004 : syminfo.mintick * 50
-        label.new(liveMidX, liveHigh + padding, syminfo.ticker + "\n(" + tfText + ")", color = titleLabelBgColorInput, textcolor = titleLabelTextColorInput, style = toLabelStyle(titleLabelStyleInput), size = toLabelSize(titleLabelSizeInput))
+        g.titleLabel.set_xy(liveMidX, liveHigh + padding)
+        g.titleLabel.set_text(syminfo.ticker + "\n(" + tfText + ")")
+        g.titleLabel.set_color(titleLabelBgColorInput)
+        g.titleLabel.set_textcolor(titleLabelTextColorInput)
+        g.titleLabel.set_style(toLabelStyle(titleLabelStyleInput))
+        g.titleLabel.set_size(toLabelSize(titleLabelSizeInput))
 
-// 绘制一条均线云图：相邻两根K线之间各画一段快线和慢线，再用 linefill 填充两线之间的区域
+// 更新第 cloudNo 条云图（从 0 开始）：相邻两根K线之间各一段快线和慢线，linefill 填充两线之间的区域
 // 每段按左端点的快慢关系单独上色，因此金叉/死叉处颜色会自然切换
-// showEdgeLine 为 false 时线段完全透明，仅作为 linefill 的锚线
-drawCloud(CloudSpec spec, array<int> midXs, int count, bool showEdgeLine) =>
-    color edgeColor = showEdgeLine ? color.white : color.new(color.white, 100)
+// showEdgeLine 为 false 时线段保持透明，仅作为 linefill 的锚线
+drawCloud(GroupDrawings g, int cloudNo, CloudSpec spec, array<int> midXs, int count, bool showEdgeLine) =>
+    color edgeColor = showEdgeLine ? color.white : TRANSPARENT
     if count >= 2  // 至少两根K线才能连成线段（count=1 时 for 0 to -1 会反向循环，必须排除）
         for p = 0 to count - 2
             int   leftOffset  = count - 1 - p           // 左端点距实时K线的偏移
@@ -431,41 +533,54 @@ drawCloud(CloudSpec spec, array<int> midXs, int count, bool showEdgeLine) =>
             float slowLeft    = spec.fastSlowValues.get(leftOffset + HTF_BAR_COUNT)
             float slowRight   = spec.fastSlowValues.get(rightOffset + HTF_BAR_COUNT)
             if not na(fastLeft) and not na(fastRight) and not na(slowLeft) and not na(slowRight)
-                color fillColor = color.new(fastLeft >= slowLeft ? spec.bullColor : spec.bearColor, spec.fillTrans)
-                line fastLine = line.new(midXs.get(p), fastLeft, midXs.get(p + 1), fastRight, color = edgeColor, width = 1)
-                line slowLine = line.new(midXs.get(p), slowLeft, midXs.get(p + 1), slowRight, color = edgeColor, width = 2)
-                linefill.new(fastLine, slowLine, fillColor)
+                int  index    = cloudNo * SEGMENT_COUNT + p
+                line fastLine = g.cloudFastLines.get(index)
+                line slowLine = g.cloudSlowLines.get(index)
+                fastLine.set_xy1(midXs.get(p), fastLeft)
+                fastLine.set_xy2(midXs.get(p + 1), fastRight)
+                fastLine.set_color(edgeColor)
+                slowLine.set_xy1(midXs.get(p), slowLeft)
+                slowLine.set_xy2(midXs.get(p + 1), slowRight)
+                slowLine.set_color(edgeColor)
+                g.cloudFills.get(index).set_color(color.new(fastLeft >= slowLeft ? spec.bullColor : spec.bearColor, spec.fillTrans))
 
 // 在分组锚点处显示诊断标签
-drawWarning(int groupNo, string message, int x) =>
-    label.new(x, close, "⚠ 周期组" + str.tostring(groupNo) + message, color = color.new(color.red, 10), textcolor = color.white, style = label.style_label_left, size = size.normal)
+drawWarning(GroupDrawings g, int groupNo, string message, int x) =>
+    g.warningLabel.set_xy(x, close)
+    g.warningLabel.set_text("⚠ 周期组" + str.tostring(groupNo) + message)
+    g.warningLabel.set_color(color.new(color.red, 10))
+    g.warningLabel.set_textcolor(color.white)
 
-// 绘制一整组：先画云图（在下层），再画K线（在上层），取数失败（如周期不受支持）时在锚点处显示诊断标签
-drawTimeframeGroup(int groupNo, array<float> ohlcData, array<CloudSpec> clouds, bool showCloudLine, string tf, int count, int liveAnchor, int candleWidth, int candleGap, bool showLabels, bool showLines, bool showTitleLabel, bool uniformColor) =>
+// 更新一整组（云图在下层、K线在上层，由对象池的创建顺序保证），取数失败（如周期不受支持）时在锚点处显示诊断标签
+drawTimeframeGroup(GroupDrawings g, int groupNo, array<float> ohlcData, array<CloudSpec> clouds, bool showCloudLine, string tf, int count, int liveAnchor, int candleWidth, int candleGap, bool showLabels, bool showLines, bool showTitleLabel, bool uniformColor) =>
     [startXs, endXs, midXs] = calcGroupPositions(count, liveAnchor, candleWidth, candleGap)
 
-    for spec in clouds
+    for [k, spec] in clouds
         if spec.show
-            drawCloud(spec, midXs, count, showCloudLine)
+            drawCloud(g, k, spec, midXs, count, showCloudLine)
 
-    drawCandles(ohlcData, timeframeText(tf), count, startXs, endXs, midXs, showLabels, showLines, showTitleLabel, uniformColor)
+    drawCandles(g, ohlcData, timeframeText(tf), count, startXs, endXs, midXs, showLabels, showLines, showTitleLabel, uniformColor)
 
     if isDataInvalid(ohlcData)
-        drawWarning(groupNo, "取数失败\n周期: " + tf, liveAnchor)
+        drawWarning(g, groupNo, "取数失败\n周期: " + tf, liveAnchor)
 
 // ─────────────────────────────────────────────
-// 主流程 —— 只在最后一根K线上绘制，每次刷新先清空再重画
+// 主流程 —— 只在最后一根K线上更新
 // ─────────────────────────────────────────────
+var GroupDrawings tf1Drawings = na
+var GroupDrawings tf2Drawings = na
+var GroupDrawings tf3Drawings = na
+
 if barstate.islast
-    // 清空本脚本上一次画的所有图形（先删 linefill，再删它引用的 line）
-    for item in linefill.all
-        item.delete()
-    for item in line.all
-        item.delete()
-    for item in box.all
-        item.delete()
-    for item in label.all
-        item.delete()
+    // 第一次用到时创建对象池
+    if na(tf1Drawings)
+        tf1Drawings := newGroupDrawings()
+        tf2Drawings := newGroupDrawings()
+        tf3Drawings := newGroupDrawings()
+
+    tf1Drawings.hideAll()
+    tf2Drawings.hideAll()
+    tf3Drawings.hideAll()
 
     if showAllInput
         int maxX = last_bar_index + MAX_FUTURE_OFFSET
@@ -498,28 +613,28 @@ if barstate.islast
             liveAnchor3 -= shift
 
         if tf1EnableInput and not isTf1HigherThanChart
-            drawWarning(1, "周期小于图表周期\n周期: " + tf1TimeframeInput + "，请改用更高的周期", liveAnchor1)
+            drawWarning(tf1Drawings, 1, "周期小于图表周期\n周期: " + tf1TimeframeInput + "，请改用更高的周期", liveAnchor1)
         else if tf1EnableInput
             array<CloudSpec> tf1Clouds = buildClouds(tf1Data, tf1ShowCloudInput,
                  tf1Cloud1ShowInput, tf1Cloud1BullColorInput, tf1Cloud2ShowInput, tf1Cloud2BullColorInput, tf1Cloud3ShowInput, tf1Cloud3BullColorInput,
                  tf1Cloud4ShowInput, tf1Cloud4BullColorInput, tf1Cloud5ShowInput, tf1Cloud5BullColorInput)
-            drawTimeframeGroup(1, tf1Data.slice(0, OHLC_SIZE), tf1Clouds, tf1ShowCloudLineInput, tf1TimeframeInput, tf1CountInput, liveAnchor1, tf1WidthInput, tf1GapInput,
+            drawTimeframeGroup(tf1Drawings, 1, tf1Data.slice(0, OHLC_SIZE), tf1Clouds, tf1ShowCloudLineInput, tf1TimeframeInput, tf1CountInput, liveAnchor1, tf1WidthInput, tf1GapInput,
                  masterLabelsInput and tf1ShowLabelsInput, masterLinesInput and tf1ShowLinesInput, masterTitleLabelInput and tf1ShowTitleLabelInput, masterUniformColorInput and tf1UniformColorInput)
 
         if tf2EnableInput and not isTf2HigherThanChart
-            drawWarning(2, "周期小于图表周期\n周期: " + tf2TimeframeInput + "，请改用更高的周期", liveAnchor2)
+            drawWarning(tf2Drawings, 2, "周期小于图表周期\n周期: " + tf2TimeframeInput + "，请改用更高的周期", liveAnchor2)
         else if tf2EnableInput
             array<CloudSpec> tf2Clouds = buildClouds(tf2Data, tf2ShowCloudInput,
                  tf2Cloud1ShowInput, tf2Cloud1BullColorInput, tf2Cloud2ShowInput, tf2Cloud2BullColorInput, tf2Cloud3ShowInput, tf2Cloud3BullColorInput,
                  tf2Cloud4ShowInput, tf2Cloud4BullColorInput, tf2Cloud5ShowInput, tf2Cloud5BullColorInput)
-            drawTimeframeGroup(2, tf2Data.slice(0, OHLC_SIZE), tf2Clouds, tf2ShowCloudLineInput, tf2TimeframeInput, tf2CountInput, liveAnchor2, tf2WidthInput, tf2GapInput,
+            drawTimeframeGroup(tf2Drawings, 2, tf2Data.slice(0, OHLC_SIZE), tf2Clouds, tf2ShowCloudLineInput, tf2TimeframeInput, tf2CountInput, liveAnchor2, tf2WidthInput, tf2GapInput,
                  masterLabelsInput and tf2ShowLabelsInput, masterLinesInput and tf2ShowLinesInput, masterTitleLabelInput and tf2ShowTitleLabelInput, masterUniformColorInput and tf2UniformColorInput)
 
         if tf3EnableInput and not isTf3HigherThanChart
-            drawWarning(3, "周期小于图表周期\n周期: " + tf3TimeframeInput + "，请改用更高的周期", liveAnchor3)
+            drawWarning(tf3Drawings, 3, "周期小于图表周期\n周期: " + tf3TimeframeInput + "，请改用更高的周期", liveAnchor3)
         else if tf3EnableInput
             array<CloudSpec> tf3Clouds = buildClouds(tf3Data, tf3ShowCloudInput,
                  tf3Cloud1ShowInput, tf3Cloud1BullColorInput, tf3Cloud2ShowInput, tf3Cloud2BullColorInput, tf3Cloud3ShowInput, tf3Cloud3BullColorInput,
                  tf3Cloud4ShowInput, tf3Cloud4BullColorInput, tf3Cloud5ShowInput, tf3Cloud5BullColorInput)
-            drawTimeframeGroup(3, tf3Data.slice(0, OHLC_SIZE), tf3Clouds, tf3ShowCloudLineInput, tf3TimeframeInput, tf3CountInput, liveAnchor3, tf3WidthInput, tf3GapInput,
+            drawTimeframeGroup(tf3Drawings, 3, tf3Data.slice(0, OHLC_SIZE), tf3Clouds, tf3ShowCloudLineInput, tf3TimeframeInput, tf3CountInput, liveAnchor3, tf3WidthInput, tf3GapInput,
                  masterLabelsInput and tf3ShowLabelsInput, masterLinesInput and tf3ShowLinesInput, masterTitleLabelInput and tf3ShowTitleLabelInput, masterUniformColorInput and tf3UniformColorInput)
