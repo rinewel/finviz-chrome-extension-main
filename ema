@@ -25,6 +25,11 @@ enum VwapAnchor
     month   = "月"
     year    = "年"
 
+enum FlipFilter
+    none      = "关闭"
+    trend     = "云3 同方向"
+    priceSide = "价格在云3 同侧"
+
 enum LabelSize
     tiny   = "极小"
     small  = "小"
@@ -312,14 +317,60 @@ if barstate.islast
 // ─────────────────────────────────────────────
 // Cloud2 翻转（默认 5-12）
 // 直接使用 Cloud 2 的两条线判断，与云变色同步；随云图前移周期一起偏移
+// 趋势过滤使用 Cloud 3（默认 34-50）：Ripster 规则，价格在 34-50 云上方只做多，下方只做空
 // ─────────────────────────────────────────────
 flipConfirmedOnlyInput = input.bool(false, "翻转三角仅在K线收盘后显示", tooltip = "打开后，实时K线上的翻转要等K线收盘确认才显示，避免盘中出现又消失。", group = GROUP_MA, display = display.none)
+flipFilterInput        = input.enum(FlipFilter.none, "翻转三角趋势过滤", tooltip = "云3 同方向：云3 多头时只显示翻多，空头时只显示翻空。\n价格在云3 同侧：收盘价在云3 上方时只显示翻多，在下方时只显示翻空，在云内都不显示。", group = GROUP_MA, display = display.none)
 
-isCloud2Bull = cloud2Fast >= cloud2Slow
-isFlipBarOk  = not flipConfirmedOnlyInput or barstate.isconfirmed
-flipToBull   = isCloud2Bull and not isCloud2Bull[1] and isFlipBarOk
-flipToBear   = not isCloud2Bull and isCloud2Bull[1] and isFlipBarOk
+cloud1Top    = math.max(cloud1Fast, cloud1Slow)
+cloud1Bottom = math.min(cloud1Fast, cloud1Slow)
+cloud3Top    = math.max(cloud3Fast, cloud3Slow)
+cloud3Bottom = math.min(cloud3Fast, cloud3Slow)
 
-plotshape(flipToBull, title = "Cloud2 翻多", style = shape.triangleup,   location = location.belowbar, color = #2D602E,   size = size.small, offset = cloudLeadInput, editable = false, display = display.pane)
-plotshape(flipToBear, title = "Cloud2 翻空", style = shape.triangledown, location = location.abovebar, color = #880b0bf5, size = size.small, offset = cloudLeadInput, editable = false, display = display.pane)
+isCloud2Bull     = cloud2Fast >= cloud2Slow
+isCloud3Bull     = cloud3Fast >= cloud3Slow
+isAboveCloud3    = close > cloud3Top
+isBelowCloud3    = close < cloud3Bottom
 
+cloud2FlipToBull = isCloud2Bull and not isCloud2Bull[1]
+cloud2FlipToBear = not isCloud2Bull and isCloud2Bull[1]
+
+isBullAllowed = switch flipFilterInput
+    FlipFilter.trend     => isCloud3Bull
+    FlipFilter.priceSide => isAboveCloud3
+    => true
+isBearAllowed = switch flipFilterInput
+    FlipFilter.trend     => not isCloud3Bull
+    FlipFilter.priceSide => isBelowCloud3
+    => true
+
+isFlipBarOk = not flipConfirmedOnlyInput or barstate.isconfirmed
+flipToBull  = cloud2FlipToBull and isBullAllowed and isFlipBarOk
+flipToBear  = cloud2FlipToBear and isBearAllowed and isFlipBarOk
+
+plotshape(flipToBull, title = "云2 翻多", style = shape.triangleup,   location = location.belowbar, color = #2D602E,   size = size.small, offset = cloudLeadInput, editable = false, display = display.pane)
+plotshape(flipToBear, title = "云2 翻空", style = shape.triangledown, location = location.abovebar, color = #880b0bf5, size = size.small, offset = cloudLeadInput, editable = false, display = display.pane)
+
+// ─────────────────────────────────────────────
+// 警报（在 TradingView「创建警报」中选择本指标和对应条件）
+// ─────────────────────────────────────────────
+cloud3FlipToBull = isCloud3Bull and not isCloud3Bull[1]
+cloud3FlipToBear = not isCloud3Bull and isCloud3Bull[1]
+
+closeAboveCloud3 = isAboveCloud3 and not isAboveCloud3[1]
+closeBelowCloud3 = isBelowCloud3 and not isBelowCloud3[1]
+
+// 回踩：云3 多头时最低价触及云1 且收盘未跌破云1；反弹：云3 空头时最高价触及云1 且收盘未升破云1
+isPullbackToCloud1 = isCloud3Bull and low <= cloud1Top and close >= cloud1Bottom
+isBounceToCloud1   = not isCloud3Bull and high >= cloud1Bottom and close <= cloud1Top
+pullbackToCloud1   = isPullbackToCloud1 and not isPullbackToCloud1[1]
+bounceToCloud1     = isBounceToCloud1 and not isBounceToCloud1[1]
+
+alertcondition(flipToBull,       "云2 翻多", "{{ticker}} {{interval}} 云2(默认 5-12) 翻多，收盘价 {{close}}")
+alertcondition(flipToBear,       "云2 翻空", "{{ticker}} {{interval}} 云2(默认 5-12) 翻空，收盘价 {{close}}")
+alertcondition(cloud3FlipToBull, "云3 翻多", "{{ticker}} {{interval}} 云3(默认 34-50) 翻多，收盘价 {{close}}")
+alertcondition(cloud3FlipToBear, "云3 翻空", "{{ticker}} {{interval}} 云3(默认 34-50) 翻空，收盘价 {{close}}")
+alertcondition(closeAboveCloud3, "收盘站上云3", "{{ticker}} {{interval}} 收盘价站上云3(默认 34-50)，收盘价 {{close}}")
+alertcondition(closeBelowCloud3, "收盘跌破云3", "{{ticker}} {{interval}} 收盘价跌破云3(默认 34-50)，收盘价 {{close}}")
+alertcondition(pullbackToCloud1, "多头回踩云1", "{{ticker}} {{interval}} 云3 多头，价格回踩云1(默认 8-9)，收盘价 {{close}}")
+alertcondition(bounceToCloud1,   "空头反弹云1", "{{ticker}} {{interval}} 云3 空头，价格反弹至云1(默认 8-9)，收盘价 {{close}}")
