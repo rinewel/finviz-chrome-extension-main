@@ -7,35 +7,35 @@ indicator('Y EMA Clouds', 'EMA_Y', overlay = true)
 // ─────────────────────────────────────────────
 // 常量
 // ─────────────────────────────────────────────
-GROUP_GLOBAL  = "General Settings"
+GROUP_GLOBAL  = "通用设置"
 GROUP_MA      = "当前周期均线云"
 GROUP_VWAP    = "VWAP"
-GROUP_MTF     = "(MTF云图)"
+GROUP_MTF     = "MTF 云图"
 
 // ─────────────────────────────────────────────
 // 通用设置
 // ─────────────────────────────────────────────
-maTypeInput        = input.string(title = 'MA Type', defval = 'EMA', options = ['EMA', 'SMA'], group = GROUP_GLOBAL, display = display.none)
-showMtfInput       = input.bool(true, "显示MTF云图", group = GROUP_GLOBAL, display = display.none)
+maTypeInput        = input.string(title = '均线类型', defval = 'EMA', options = ['EMA', 'SMA'], group = GROUP_GLOBAL, display = display.none)
+showMtfInput       = input.bool(true, "显示 MTF 云图", group = GROUP_GLOBAL, display = display.none)
 showMtfLabelsInput = input.bool(true, "总开关 - 显示 MTF 标签", tooltip = "控制全部 5 个 MTF 周期标签的总开关。只有此开关和下方对应标签的开关都打开时，标签才会显示。", group = GROUP_GLOBAL, display = display.none)
 
 // ─────────────────────────────────────────────
 // 当前周期均线云
 // ─────────────────────────────────────────────
-cloud1FastLenInput = input.int(8,   title = 'Short MA1 Length', minval = 1, group = GROUP_MA, display = display.none)
-cloud1SlowLenInput = input.int(9,   title = 'Long MA1 Length',  minval = 1, group = GROUP_MA, display = display.none)
-cloud2FastLenInput = input.int(5,   title = 'Short MA2 Length', minval = 1, group = GROUP_MA, display = display.none)
-cloud2SlowLenInput = input.int(12,  title = 'Long MA2 Length',  minval = 1, group = GROUP_MA, display = display.none)
-cloud3FastLenInput = input.int(34,  title = 'Short MA3 Length', minval = 1, group = GROUP_MA, display = display.none)
-cloud3SlowLenInput = input.int(50,  title = 'Long MA3 Length',  minval = 1, group = GROUP_MA, display = display.none)
-cloud4FastLenInput = input.int(20,  title = 'Short MA4 Length', minval = 1, group = GROUP_MA, display = display.none)
-cloud4SlowLenInput = input.int(21,  title = 'Long MA4 Length',  minval = 1, group = GROUP_MA, display = display.none)
-cloud5FastLenInput = input.int(72,  title = 'Short MA5 Length', minval = 1, group = GROUP_MA, display = display.none)
-cloud5SlowLenInput = input.int(89,  title = 'Long MA5 Length',  minval = 1, group = GROUP_MA, display = display.none)
-cloud6FastLenInput = input.int(180, title = 'Short MA6 Length', minval = 1, group = GROUP_MA, display = display.none)
-cloud6SlowLenInput = input.int(200, title = 'Long MA6 Length',  minval = 1, group = GROUP_MA, display = display.none)
+cloud1FastLenInput = input.int(8,   title = '云1 快线长度', minval = 1, group = GROUP_MA, display = display.none)
+cloud1SlowLenInput = input.int(9,   title = '云1 慢线长度', minval = 1, group = GROUP_MA, display = display.none)
+cloud2FastLenInput = input.int(5,   title = '云2 快线长度', minval = 1, group = GROUP_MA, display = display.none)
+cloud2SlowLenInput = input.int(12,  title = '云2 慢线长度', minval = 1, group = GROUP_MA, display = display.none)
+cloud3FastLenInput = input.int(34,  title = '云3 快线长度', minval = 1, group = GROUP_MA, display = display.none)
+cloud3SlowLenInput = input.int(50,  title = '云3 慢线长度', minval = 1, group = GROUP_MA, display = display.none)
+cloud4FastLenInput = input.int(20,  title = '云4 快线长度', minval = 1, group = GROUP_MA, display = display.none)
+cloud4SlowLenInput = input.int(21,  title = '云4 慢线长度', minval = 1, group = GROUP_MA, display = display.none)
+cloud5FastLenInput = input.int(72,  title = '云5 快线长度', minval = 1, group = GROUP_MA, display = display.none)
+cloud5SlowLenInput = input.int(89,  title = '云5 慢线长度', minval = 1, group = GROUP_MA, display = display.none)
+cloud6FastLenInput = input.int(180, title = '云6 快线长度', minval = 1, group = GROUP_MA, display = display.none)
+cloud6SlowLenInput = input.int(200, title = '云6 慢线长度', minval = 1, group = GROUP_MA, display = display.none)
 
-maSrcInput = input.source(hl2, title = 'Source', group = GROUP_MA, display = display.none)
+maSrcInput = input.source(hl2, title = '均线数据源', group = GROUP_MA, display = display.none)
 
 calcMa(length) =>
     switch maTypeInput
@@ -55,15 +55,15 @@ cloud5Slow = calcMa(cloud5SlowLenInput)
 cloud6Fast = calcMa(cloud6FastLenInput)
 cloud6Slow = calcMa(cloud6SlowLenInput)
 
-showLineInput   = input.bool(false, title = 'Display MA Line', group = GROUP_MA, display = display.none)
-showCloud1Input = input.bool(true, title = 'Show MA Cloud-1', group = GROUP_MA, display = display.none)
-showCloud2Input = input.bool(true, title = 'Show MA Cloud-2', group = GROUP_MA, display = display.none)
-showCloud3Input = input.bool(true, title = 'Show MA Cloud-3', group = GROUP_MA, display = display.none)
-showCloud4Input = input.bool(true, title = 'Show MA Cloud-4', group = GROUP_MA, display = display.none)
-showCloud5Input = input.bool(true, title = 'Show MA Cloud-5', group = GROUP_MA, display = display.none)
-showCloud6Input = input.bool(true, title = 'Show MA Cloud-6', group = GROUP_MA, display = display.none)
+showLineInput   = input.bool(false, title = '显示均线', group = GROUP_MA, display = display.none)
+showCloud1Input = input.bool(true, title = '显示云1', group = GROUP_MA, display = display.none)
+showCloud2Input = input.bool(true, title = '显示云2', group = GROUP_MA, display = display.none)
+showCloud3Input = input.bool(true, title = '显示云3', group = GROUP_MA, display = display.none)
+showCloud4Input = input.bool(true, title = '显示云4', group = GROUP_MA, display = display.none)
+showCloud5Input = input.bool(true, title = '显示云5', group = GROUP_MA, display = display.none)
+showCloud6Input = input.bool(true, title = '显示云6', group = GROUP_MA, display = display.none)
 
-cloudLeadInput = input.int(0, minval = 0, title = 'Leading Period For MA Cloud', group = GROUP_MA, display = display.none)
+cloudLeadInput = input.int(0, minval = 0, title = '云图前移周期', group = GROUP_MA, display = display.none)
 
 cloud1Color = cloud1Fast >= cloud1Slow ? #036103 : #880e4f
 cloud2Color = cloud2Fast >= cloud2Slow ? #4caf50 : #f44336
@@ -111,15 +111,15 @@ fill(cloud6FastPlot, cloud6SlowPlot, color = color.new(cloud6Color, 65), title =
 // ─────────────────────────────────────────────
 // VWAP
 // ─────────────────────────────────────────────
-vwapAnchorInput = input.string(defval = 'Session', title = 'Anchor Period', options = ['Session', 'Week', 'Month', 'Year'], group = GROUP_VWAP, display = display.none)
-vwapColorInput  = input.color(#3A6CA8, title = 'VWAP Color', group = GROUP_VWAP, display = display.none)
-vwapSrcInput    = input.source(hlc3, title = 'VWAP Source', tooltip = "标准 VWAP 使用 hlc3。", group = GROUP_VWAP, display = display.none)
+vwapAnchorInput = input.string(defval = '交易日', title = '锚定周期', options = ['交易日', '周', '月', '年'], group = GROUP_VWAP, display = display.none)
+vwapColorInput  = input.color(#3A6CA8, title = 'VWAP 颜色', group = GROUP_VWAP, display = display.none)
+vwapSrcInput    = input.source(hlc3, title = 'VWAP 数据源', tooltip = "标准 VWAP 使用 hlc3。", group = GROUP_VWAP, display = display.none)
 
 // 使用内置 ta.vwap：timeframe.change 按交易所交易日/周/月/年切换，跨午夜开盘的品种也能正确处理
 vwapAnchorTf = switch vwapAnchorInput
-    'Session' => 'D'
-    'Week'    => 'W'
-    'Month'   => 'M'
+    '交易日' => 'D'
+    '周'     => 'W'
+    '月'     => 'M'
     => '12M'
 
 vwapValue = ta.vwap(vwapSrcInput, timeframe.change(vwapAnchorTf))
@@ -128,60 +128,60 @@ plot(vwapValue, title = 'VWAP', color = vwapColorInput, linewidth = 4, linestyle
 // ─────────────────────────────────────────────
 // MTF 云图
 // ─────────────────────────────────────────────
-dayTfInput     = input.timeframe("1D", "Day MTF云图", group = GROUP_MTF, display = display.none)
-dayLeadInput   = input.int(0, "Day Leading Period (MTF)", minval = 0, group = GROUP_MTF, display = display.none)
-hourTfInput    = input.timeframe("60", "Hour MTF云图", group = GROUP_MTF, display = display.none)
-hourLeadInput  = input.int(0, "Hour Leading Period (MTF)", minval = 0, group = GROUP_MTF, display = display.none)
+dayTfInput     = input.timeframe("1D", "日线组 周期", group = GROUP_MTF, display = display.none)
+dayLeadInput   = input.int(0, "日线组 前移周期", minval = 0, group = GROUP_MTF, display = display.none)
+hourTfInput    = input.timeframe("60", "小时组 周期", group = GROUP_MTF, display = display.none)
+hourLeadInput  = input.int(0, "小时组 前移周期", minval = 0, group = GROUP_MTF, display = display.none)
 
-showDayCloud1Input  = input.bool(true, "Day MTF Cloud 1",  group = GROUP_MTF, inline = "m1",  display = display.none)
-showDayCloud2Input  = input.bool(true, "Day MTF Cloud 2",  group = GROUP_MTF, inline = "m2",  display = display.none)
-showDayCloud3Input  = input.bool(true, "Day MTF Cloud 3",  group = GROUP_MTF, inline = "m3",  display = display.none)
-showHourCloud4Input = input.bool(true, "Hour MTF Cloud 4", group = GROUP_MTF, inline = "m4",  display = display.none)
-showHourCloud5Input = input.bool(true, "Hour MTF Cloud 5", group = GROUP_MTF, inline = "m5",  display = display.none)
+showDayCloud1Input  = input.bool(true, "日线组 云1", group = GROUP_MTF, inline = "m1",  display = display.none)
+showDayCloud2Input  = input.bool(true, "日线组 云2", group = GROUP_MTF, inline = "m2",  display = display.none)
+showDayCloud3Input  = input.bool(true, "日线组 云3", group = GROUP_MTF, inline = "m3",  display = display.none)
+showHourCloud4Input = input.bool(true, "小时组 云4", group = GROUP_MTF, inline = "m4",  display = display.none)
+showHourCloud5Input = input.bool(true, "小时组 云5", group = GROUP_MTF, inline = "m5",  display = display.none)
 
 // --- 标签开关 + 字体大小 + 颜色（同一行，子开关右边） ---
-showLabel1Input  = input.bool(true, "Show Label - Cloud 1", group = GROUP_MTF, inline = "lbl1", display = display.none)
-label1SizeInput  = input.string("huge", "", options = ["tiny", "small", "normal", "large", "huge"], group = GROUP_MTF, inline = "lbl1", display = display.none)
+showLabel1Input  = input.bool(true, "显示标签 - 云1", group = GROUP_MTF, inline = "lbl1", display = display.none)
+label1SizeInput  = input.string("特大", "", options = ["极小", "小", "正常", "大", "特大"], group = GROUP_MTF, inline = "lbl1", display = display.none)
 label1ColorInput = input.color(color.blue, "", group = GROUP_MTF, inline = "lbl1", display = display.none)
 
-showLabel2Input  = input.bool(true, "Show Label - Cloud 2", group = GROUP_MTF, inline = "lbl2", display = display.none)
-label2SizeInput  = input.string("huge", "", options = ["tiny", "small", "normal", "large", "huge"], group = GROUP_MTF, inline = "lbl2", display = display.none)
+showLabel2Input  = input.bool(true, "显示标签 - 云2", group = GROUP_MTF, inline = "lbl2", display = display.none)
+label2SizeInput  = input.string("特大", "", options = ["极小", "小", "正常", "大", "特大"], group = GROUP_MTF, inline = "lbl2", display = display.none)
 label2ColorInput = input.color(color.teal, "", group = GROUP_MTF, inline = "lbl2", display = display.none)
 
-showLabel3Input  = input.bool(true, "Show Label - Cloud 3", group = GROUP_MTF, inline = "lbl3", display = display.none)
-label3SizeInput  = input.string("huge", "", options = ["tiny", "small", "normal", "large", "huge"], group = GROUP_MTF, inline = "lbl3", display = display.none)
+showLabel3Input  = input.bool(true, "显示标签 - 云3", group = GROUP_MTF, inline = "lbl3", display = display.none)
+label3SizeInput  = input.string("特大", "", options = ["极小", "小", "正常", "大", "特大"], group = GROUP_MTF, inline = "lbl3", display = display.none)
 label3ColorInput = input.color(color.purple, "", group = GROUP_MTF, inline = "lbl3", display = display.none)
 
-showLabel4Input  = input.bool(false, "Show Label - Cloud 4", group = GROUP_MTF, inline = "lbl4", display = display.none)
-label4SizeInput  = input.string("huge", "", options = ["tiny", "small", "normal", "large", "huge"], group = GROUP_MTF, inline = "lbl4", display = display.none)
+showLabel4Input  = input.bool(false, "显示标签 - 云4", group = GROUP_MTF, inline = "lbl4", display = display.none)
+label4SizeInput  = input.string("特大", "", options = ["极小", "小", "正常", "大", "特大"], group = GROUP_MTF, inline = "lbl4", display = display.none)
 label4ColorInput = input.color(color.orange, "", group = GROUP_MTF, inline = "lbl4", display = display.none)
 
-showLabel5Input  = input.bool(false, "Show Label - Cloud 5", group = GROUP_MTF, inline = "lbl5", display = display.none)
-label5SizeInput  = input.string("huge", "", options = ["tiny", "small", "normal", "large", "huge"], group = GROUP_MTF, inline = "lbl5", display = display.none)
+showLabel5Input  = input.bool(false, "显示标签 - 云5", group = GROUP_MTF, inline = "lbl5", display = display.none)
+label5SizeInput  = input.string("特大", "", options = ["极小", "小", "正常", "大", "特大"], group = GROUP_MTF, inline = "lbl5", display = display.none)
 label5ColorInput = input.color(color.fuchsia, "", group = GROUP_MTF, inline = "lbl5", display = display.none)
 
-labelOffsetInput = input.int(2, "MTF Label Offset (bars)", minval = 0, tooltip = "标签位于最后一根K线右侧多少根K线的位置。", group = GROUP_MTF, display = display.none)
+labelOffsetInput = input.int(2, "MTF 标签右移K线数", minval = 0, tooltip = "标签位于最后一根K线右侧多少根K线的位置。", group = GROUP_MTF, display = display.none)
 
 // 把字符串选项转换成 label.new 需要的 size.* 常量
 toLabelSize(sizeStr) =>
     switch sizeStr
-        "tiny"   => size.tiny
-        "small"  => size.small
-        "normal" => size.normal
-        "large"  => size.large
-        "huge"   => size.huge
+        "极小" => size.tiny
+        "小"   => size.small
+        "正常" => size.normal
+        "大"   => size.large
+        "特大" => size.huge
         => size.small
 
-dayCloud1FastLenInput  = input.int(8,  title = "Day MA 1 Short Length",  minval = 1, group = GROUP_MTF, display = display.none)
-dayCloud1SlowLenInput  = input.int(9,  title = "Day MA 1 Long Length",   minval = 1, group = GROUP_MTF, display = display.none)
-dayCloud2FastLenInput  = input.int(20, title = "Day MA 2 Short Length",  minval = 1, group = GROUP_MTF, display = display.none)
-dayCloud2SlowLenInput  = input.int(21, title = "Day MA 2 Long Length",   minval = 1, group = GROUP_MTF, display = display.none)
-dayCloud3FastLenInput  = input.int(50, title = "Day MA 3 Short Length",  minval = 1, group = GROUP_MTF, display = display.none)
-dayCloud3SlowLenInput  = input.int(55, title = "Day MA 3 Long Length",   minval = 1, group = GROUP_MTF, display = display.none)
-hourCloud4FastLenInput = input.int(34, title = "Hour MA 4 Short Length", minval = 1, group = GROUP_MTF, display = display.none)
-hourCloud4SlowLenInput = input.int(50, title = "Hour MA 4 Long Length",  minval = 1, group = GROUP_MTF, display = display.none)
-hourCloud5FastLenInput = input.int(50, title = "Hour MA 5 Short Length", minval = 1, group = GROUP_MTF, display = display.none)
-hourCloud5SlowLenInput = input.int(55, title = "Hour MA 5 Long Length",  minval = 1, group = GROUP_MTF, display = display.none)
+dayCloud1FastLenInput  = input.int(8,  title = "日线组 云1 快线长度", minval = 1, group = GROUP_MTF, display = display.none)
+dayCloud1SlowLenInput  = input.int(9,  title = "日线组 云1 慢线长度", minval = 1, group = GROUP_MTF, display = display.none)
+dayCloud2FastLenInput  = input.int(20, title = "日线组 云2 快线长度", minval = 1, group = GROUP_MTF, display = display.none)
+dayCloud2SlowLenInput  = input.int(21, title = "日线组 云2 慢线长度", minval = 1, group = GROUP_MTF, display = display.none)
+dayCloud3FastLenInput  = input.int(50, title = "日线组 云3 快线长度", minval = 1, group = GROUP_MTF, display = display.none)
+dayCloud3SlowLenInput  = input.int(55, title = "日线组 云3 慢线长度", minval = 1, group = GROUP_MTF, display = display.none)
+hourCloud4FastLenInput = input.int(34, title = "小时组 云4 快线长度", minval = 1, group = GROUP_MTF, display = display.none)
+hourCloud4SlowLenInput = input.int(50, title = "小时组 云4 慢线长度", minval = 1, group = GROUP_MTF, display = display.none)
+hourCloud5FastLenInput = input.int(50, title = "小时组 云5 快线长度", minval = 1, group = GROUP_MTF, display = display.none)
+hourCloud5SlowLenInput = input.int(55, title = "小时组 云5 慢线长度", minval = 1, group = GROUP_MTF, display = display.none)
 
 // 高周期均线：跟随 MA Type 设置（实时K线跟随未收盘的高周期K线，历史K线只显示已收盘的值）
 [dayFast1, daySlow1, dayFast2, daySlow2, dayFast3, daySlow3] = request.security(syminfo.tickerid, dayTfInput,
