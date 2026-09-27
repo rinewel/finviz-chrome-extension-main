@@ -73,7 +73,7 @@ enum LabelStyle
 // 输入：均线云图数据源（三组、全部云图共用）
 // ─────────────────────────────────────────────
 const string MA_SOURCE_GROUP = "均线云图数据源"
-float  maSourceInput = input.source(close, "均线数据源", group = MA_SOURCE_GROUP, display = display.none)
+float maSourceInput = input.source(close, "均线数据源", group = MA_SOURCE_GROUP, display = display.none)
 MaType maTypeInput   = input.enum(MaType.ema, "均线类型", group = MA_SOURCE_GROUP, display = display.none)
 
 // ─────────────────────────────────────────────
@@ -96,8 +96,10 @@ const string GLOBAL_GROUP = "全局设置"
 bool showAllInput = input.bool(true, "总开关 - 显示全部投影（关闭则隐藏全部内容）", group = GLOBAL_GROUP, display = display.none)
 // 统一颜色总开关：需与各组的"统一颜色显示"子开关同时开启才生效
 bool masterUniformColorInput = input.bool(true, "总开关 - 统一颜色显示（关闭则历史K线偏淡、实时K线更实）", group = GLOBAL_GROUP, display = display.none)
+// 按周期固定交易时段：日线及以上用常规时段，日内周期含盘前盘后
+bool fixSessionByTfInput = input.bool(true, "按周期固定交易时段", tooltip = "打开后：日线及以上只用常规时段数据（与标准日线一致）；日内周期（如 1H / 4H）总是包含盘前盘后。\n关闭后：跟随图表的盘前盘后设置。\n只对有盘前盘后的品种（美股、ETF）有影响。", group = GLOBAL_GROUP, display = display.none)
 // 实时K线的锚点位置（相对最新K线向右偏移的柱数），历史K线从锚点往左排开
-int anchorOffsetInput = input.int(30, "右侧偏移（柱数，实时K线的锚点位置）", minval = -30, maxval = 400, group = GLOBAL_GROUP, display = display.none)
+int  anchorOffsetInput = input.int(30, "右侧偏移（柱数，实时K线的锚点位置）", minval = -30, maxval = 400, group = GLOBAL_GROUP, display = display.none)
 
 // 以下三个总开关需与各组对应的子开关同时开启，该项才会显示
 bool masterLabelsInput     = input.bool(false, "总开关 - 显示价格标签", group = GLOBAL_GROUP, display = display.none)
@@ -115,8 +117,8 @@ int liveBodyTransInput = input.int(0, "实时K线透明度", minval = 0, maxval 
 // ─────────────────────────────────────────────
 const string TITLE_LABEL_GROUP = "标题标签"
 LabelSize  titleLabelSizeInput      = input.enum(LabelSize.normal, "尺寸", group = TITLE_LABEL_GROUP, display = display.none)
-color      titleLabelTextColorInput = input.color(color.white, "文本颜色", group = TITLE_LABEL_GROUP, display = display.none)
-color      titleLabelBgColorInput   = input.color(color.new(color.gray, 20), "背景颜色", group = TITLE_LABEL_GROUP, display = display.none)
+color titleLabelTextColorInput = input.color(color.white, "文本颜色", group = TITLE_LABEL_GROUP, display = display.none)
+color titleLabelBgColorInput   = input.color(color.new(color.gray, 20), "背景颜色", group = TITLE_LABEL_GROUP, display = display.none)
 LabelStyle titleLabelStyleInput     = input.enum(LabelStyle.down, "样式", group = TITLE_LABEL_GROUP, display = display.none)
 
 // ─────────────────────────────────────────────
@@ -348,10 +350,15 @@ htfGroupValues(simple bool show1, simple int fast1, simple int slow1, simple boo
     data
 
 // 每组只发起 1 次跨周期请求（K线与 5 条云图合并在一起），三组最多 3 次
-// 数据沿用图表的交易时段设置：图表开了盘前盘后时，1H/4H 也会包含盘前盘后
+// 交易时段由 sessionTickerFor 决定（见"按周期固定交易时段"）
 // enabled 为 false 时不发起请求，直接返回全 na 占位数组；showN 为 false 的云图不计算均线
-fetchHtfGroup(bool enabled, string tf, simple bool show1, simple int fast1, simple int slow1, simple bool show2, simple int fast2, simple int slow2, simple bool show3, simple int fast3, simple int slow3, simple bool show4, simple int fast4, simple int slow4, simple bool show5, simple int fast5, simple int slow5) =>
-    enabled ? request.security(syminfo.tickerid, tf, htfGroupValues(show1, fast1, slow1, show2, fast2, slow2, show3, fast3, slow3, show4, fast4, slow4, show5, fast5, slow5)) : array.new<float>(GROUP_DATA_SIZE, na)
+// 按周期选择请求用的品种代码：日线及以上用常规时段，日内周期用含盘前盘后的时段；开关关闭时跟随图表
+sessionTickerFor(simple string tf) =>
+    bool isDailyOrAbove = timeframe.in_seconds(tf) >= 86400
+    fixSessionByTfInput ? ticker.modify(syminfo.tickerid, session = isDailyOrAbove ? session.regular : session.extended) : syminfo.tickerid
+
+fetchHtfGroup(bool enabled, simple string tf, simple bool show1, simple int fast1, simple int slow1, simple bool show2, simple int fast2, simple int slow2, simple bool show3, simple int fast3, simple int slow3, simple bool show4, simple int fast4, simple int slow4, simple bool show5, simple int fast5, simple int slow5) =>
+    enabled ? request.security(sessionTickerFor(tf), tf, htfGroupValues(show1, fast1, slow1, show2, fast2, slow2, show3, fast3, slow3, show4, fast4, slow4, show5, fast5, slow5)) : array.new<float>(GROUP_DATA_SIZE, na)
 
 // 分组周期必须 ≥ 图表周期：小于图表周期时 request.security 只能取到每根图表K线里最后一根小周期K线，
 // 投影出来的形状看似正常其实是错的，所以直接不取数，改为显示提示
