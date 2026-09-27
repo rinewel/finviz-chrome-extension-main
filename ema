@@ -17,7 +17,7 @@ GROUP_MTF     = "(MTF云图)"
 // ─────────────────────────────────────────────
 maTypeInput        = input.string(title = 'MA Type', defval = 'EMA', options = ['EMA', 'SMA'], group = GROUP_GLOBAL, display = display.none)
 showMtfInput       = input.bool(true, "显示MTF云图", group = GROUP_GLOBAL, display = display.none)
-showMtfLabelsInput = input.bool(true, "总开关 - 显示 MTF 标签", tooltip = "Overall ON/OFF gate for all 5 timeframe tags. A label only shows when this AND its own switch below are both ON.", group = GROUP_GLOBAL, display = display.none)
+showMtfLabelsInput = input.bool(true, "总开关 - 显示 MTF 标签", tooltip = "控制全部 5 个 MTF 周期标签的总开关。只有此开关和下方对应标签的开关都打开时，标签才会显示。", group = GROUP_GLOBAL, display = display.none)
 
 // ─────────────────────────────────────────────
 // 当前周期均线云
@@ -160,7 +160,7 @@ showLabel5Input  = input.bool(false, "Show Label - Cloud 5", group = GROUP_MTF, 
 label5SizeInput  = input.string("huge", "", options = ["tiny", "small", "normal", "large", "huge"], group = GROUP_MTF, inline = "lbl5", display = display.none)
 label5ColorInput = input.color(color.fuchsia, "", group = GROUP_MTF, inline = "lbl5", display = display.none)
 
-labelOffsetInput = input.int(2, "MTF Label Offset (bars)", minval = 0, tooltip = "How many bars to the right of the last candle the label sits.", group = GROUP_MTF, display = display.none)
+labelOffsetInput = input.int(2, "MTF Label Offset (bars)", minval = 0, tooltip = "标签位于最后一根K线右侧多少根K线的位置。", group = GROUP_MTF, display = display.none)
 
 // 把字符串选项转换成 label.new 需要的 size.* 常量
 toLabelSize(sizeStr) =>
