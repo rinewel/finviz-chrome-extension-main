@@ -8,32 +8,34 @@ indicator('Y EMA Clouds', 'EMA_Y', overlay = true)
 // 常量
 // ─────────────────────────────────────────────
 GROUP_GLOBAL  = "General Settings"
+GROUP_MA      = "当前周期均线云"
+GROUP_VWAP    = "VWAP"
 GROUP_MTF     = "(MTF云图)"
 
 // ─────────────────────────────────────────────
 // 通用设置
 // ─────────────────────────────────────────────
-maTypeInput        = input.string(title = 'MA Type', defval = 'EMA', options = ['EMA', 'SMA'], display = display.none)
+maTypeInput        = input.string(title = 'MA Type', defval = 'EMA', options = ['EMA', 'SMA'], group = GROUP_GLOBAL, display = display.none)
 showMtfInput       = input.bool(true, "显示MTF云图", group = GROUP_GLOBAL, display = display.none)
 showMtfLabelsInput = input.bool(true, "总开关 - 显示 MTF 标签", tooltip = "Overall ON/OFF gate for all 5 timeframe tags. A label only shows when this AND its own switch below are both ON.", group = GROUP_GLOBAL, display = display.none)
 
 // ─────────────────────────────────────────────
 // 当前周期均线云
 // ─────────────────────────────────────────────
-cloud1FastLenInput = input.int(8,   title = 'Short MA1 Length', minval = 1, display = display.none)
-cloud1SlowLenInput = input.int(9,   title = 'Long MA1 Length',  minval = 1, display = display.none)
-cloud2FastLenInput = input.int(5,   title = 'Short MA2 Length', minval = 1, display = display.none)
-cloud2SlowLenInput = input.int(12,  title = 'Long MA2 Length',  minval = 1, display = display.none)
-cloud3FastLenInput = input.int(34,  title = 'Short MA3 Length', minval = 1, display = display.none)
-cloud3SlowLenInput = input.int(50,  title = 'Long MA3 Length',  minval = 1, display = display.none)
-cloud4FastLenInput = input.int(20,  title = 'Short MA4 Length', minval = 1, display = display.none)
-cloud4SlowLenInput = input.int(21,  title = 'Long MA4 Length',  minval = 1, display = display.none)
-cloud5FastLenInput = input.int(72,  title = 'Short MA5 Length', minval = 1, display = display.none)
-cloud5SlowLenInput = input.int(89,  title = 'Long MA5 Length',  minval = 1, display = display.none)
-cloud6FastLenInput = input.int(180, title = 'Short MA6 Length', minval = 1, display = display.none)
-cloud6SlowLenInput = input.int(200, title = 'Long MA6 Length',  minval = 1, display = display.none)
+cloud1FastLenInput = input.int(8,   title = 'Short MA1 Length', minval = 1, group = GROUP_MA, display = display.none)
+cloud1SlowLenInput = input.int(9,   title = 'Long MA1 Length',  minval = 1, group = GROUP_MA, display = display.none)
+cloud2FastLenInput = input.int(5,   title = 'Short MA2 Length', minval = 1, group = GROUP_MA, display = display.none)
+cloud2SlowLenInput = input.int(12,  title = 'Long MA2 Length',  minval = 1, group = GROUP_MA, display = display.none)
+cloud3FastLenInput = input.int(34,  title = 'Short MA3 Length', minval = 1, group = GROUP_MA, display = display.none)
+cloud3SlowLenInput = input.int(50,  title = 'Long MA3 Length',  minval = 1, group = GROUP_MA, display = display.none)
+cloud4FastLenInput = input.int(20,  title = 'Short MA4 Length', minval = 1, group = GROUP_MA, display = display.none)
+cloud4SlowLenInput = input.int(21,  title = 'Long MA4 Length',  minval = 1, group = GROUP_MA, display = display.none)
+cloud5FastLenInput = input.int(72,  title = 'Short MA5 Length', minval = 1, group = GROUP_MA, display = display.none)
+cloud5SlowLenInput = input.int(89,  title = 'Long MA5 Length',  minval = 1, group = GROUP_MA, display = display.none)
+cloud6FastLenInput = input.int(180, title = 'Short MA6 Length', minval = 1, group = GROUP_MA, display = display.none)
+cloud6SlowLenInput = input.int(200, title = 'Long MA6 Length',  minval = 1, group = GROUP_MA, display = display.none)
 
-maSrcInput = input.source(hl2, title = 'Source', display = display.none)
+maSrcInput = input.source(hl2, title = 'Source', group = GROUP_MA, display = display.none)
 
 calcMa(length) =>
     switch maTypeInput
@@ -53,15 +55,15 @@ cloud5Slow = calcMa(cloud5SlowLenInput)
 cloud6Fast = calcMa(cloud6FastLenInput)
 cloud6Slow = calcMa(cloud6SlowLenInput)
 
-showLineInput   = input(false, title = 'Display MA Line', display = display.none)
-showCloud1Input = input(true, title = 'Show MA Cloud-1', display = display.none)
-showCloud2Input = input(true, title = 'Show MA Cloud-2', display = display.none)
-showCloud3Input = input(true, title = 'Show MA Cloud-3', display = display.none)
-showCloud4Input = input(true, title = 'Show MA Cloud-4', display = display.none)
-showCloud5Input = input(true, title = 'Show MA Cloud-5', display = display.none)
-showCloud6Input = input(true, title = 'Show MA Cloud-6', display = display.none)
+showLineInput   = input.bool(false, title = 'Display MA Line', group = GROUP_MA, display = display.none)
+showCloud1Input = input.bool(true, title = 'Show MA Cloud-1', group = GROUP_MA, display = display.none)
+showCloud2Input = input.bool(true, title = 'Show MA Cloud-2', group = GROUP_MA, display = display.none)
+showCloud3Input = input.bool(true, title = 'Show MA Cloud-3', group = GROUP_MA, display = display.none)
+showCloud4Input = input.bool(true, title = 'Show MA Cloud-4', group = GROUP_MA, display = display.none)
+showCloud5Input = input.bool(true, title = 'Show MA Cloud-5', group = GROUP_MA, display = display.none)
+showCloud6Input = input.bool(true, title = 'Show MA Cloud-6', group = GROUP_MA, display = display.none)
 
-cloudLeadInput = input.int(0, minval = 0, title = 'Leading Period For MA Cloud', display = display.none)
+cloudLeadInput = input.int(0, minval = 0, title = 'Leading Period For MA Cloud', group = GROUP_MA, display = display.none)
 
 cloud1Color = cloud1Fast >= cloud1Slow ? #036103 : #880e4f
 cloud2Color = cloud2Fast >= cloud2Slow ? #4caf50 : #f44336
@@ -77,7 +79,7 @@ cloud4FastLineColor = cloud4Fast >= cloud4Fast[1] ? color.olive : color.maroon
 cloud5FastLineColor = cloud5Fast >= cloud5Fast[1] ? color.olive : color.maroon
 cloud6FastLineColor = cloud6Fast >= cloud6Fast[1] ? color.olive : color.maroon
 
-// editable=false により、Styleタブに個別の線色/太さ/線種ピッカーが表示されなくなる
+// editable=false：Style 标签页中不再显示每条线单独的颜色/粗细/线型设置
 cloud1FastPlot = plot(showCloud1Input ? cloud1Fast : na, color = showLineInput ? cloud1FastLineColor : na, linewidth = 1, offset = cloudLeadInput, title = 'Short Leading MA1', editable = false, display = display.pane)
 cloud2FastPlot = plot(showCloud2Input ? cloud2Fast : na, color = showLineInput ? cloud2FastLineColor : na, linewidth = 1, offset = cloudLeadInput, title = 'Short Leading MA2', editable = false, display = display.pane)
 cloud3FastPlot = plot(showCloud3Input ? cloud3Fast : na, color = showLineInput ? cloud3FastLineColor : na, linewidth = 1, offset = cloudLeadInput, title = 'Short Leading MA3', editable = false, display = display.pane)
@@ -109,9 +111,9 @@ fill(cloud6FastPlot, cloud6SlowPlot, color = color.new(cloud6Color, 65), title =
 // ─────────────────────────────────────────────
 // VWAP
 // ─────────────────────────────────────────────
-vwapAnchorInput = input.string(defval = 'Session', title = 'Anchor Period', options = ['Session', 'Week', 'Month', 'Year'], display = display.none)
-vwapColorInput  = input.color(color.new(#3A6CA8, 0), title = 'VWAP Color', group = 'Visual Settings', display = display.none)
-vwapSrcInput    = input.source(hlc3, title = 'VWAP Source', tooltip = "标准 VWAP 使用 hlc3。改成 close 可恢复旧版数值。", group = 'Visual Settings', display = display.none)
+vwapAnchorInput = input.string(defval = 'Session', title = 'Anchor Period', options = ['Session', 'Week', 'Month', 'Year'], group = GROUP_VWAP, display = display.none)
+vwapColorInput  = input.color(#3A6CA8, title = 'VWAP Color', group = GROUP_VWAP, display = display.none)
+vwapSrcInput    = input.source(hlc3, title = 'VWAP Source', tooltip = "标准 VWAP 使用 hlc3。", group = GROUP_VWAP, display = display.none)
 
 // 使用内置 ta.vwap：timeframe.change 按交易所交易日/周/月/年切换，跨午夜开盘的品种也能正确处理
 vwapAnchorTf = switch vwapAnchorInput
@@ -170,18 +172,18 @@ toLabelSize(sizeStr) =>
         "huge"   => size.huge
         => size.small
 
-dayCloud1FastLenInput  = input.int(8,  title = "Day MA 1 Short Length",  minval = 1, display = display.none)
-dayCloud1SlowLenInput  = input.int(9,  title = "Day MA 1 Long Length",   minval = 1, display = display.none)
-dayCloud2FastLenInput  = input.int(20, title = "Day MA 2 Short Length",  minval = 1, display = display.none)
-dayCloud2SlowLenInput  = input.int(21, title = "Day MA 2 Long Length",   minval = 1, display = display.none)
-dayCloud3FastLenInput  = input.int(50, title = "Day MA 3 Short Length",  minval = 1, display = display.none)
-dayCloud3SlowLenInput  = input.int(55, title = "Day MA 3 Long Length",   minval = 1, display = display.none)
-hourCloud4FastLenInput = input.int(34, title = "Hour MA 4 Short Length", minval = 1, display = display.none)
-hourCloud4SlowLenInput = input.int(50, title = "Hour MA 4 Long Length",  minval = 1, display = display.none)
-hourCloud5FastLenInput = input.int(50, title = "Hour MA 5 Short Length", minval = 1, display = display.none)
-hourCloud5SlowLenInput = input.int(55, title = "Hour MA 5 Long Length",  minval = 1, display = display.none)
+dayCloud1FastLenInput  = input.int(8,  title = "Day MA 1 Short Length",  minval = 1, group = GROUP_MTF, display = display.none)
+dayCloud1SlowLenInput  = input.int(9,  title = "Day MA 1 Long Length",   minval = 1, group = GROUP_MTF, display = display.none)
+dayCloud2FastLenInput  = input.int(20, title = "Day MA 2 Short Length",  minval = 1, group = GROUP_MTF, display = display.none)
+dayCloud2SlowLenInput  = input.int(21, title = "Day MA 2 Long Length",   minval = 1, group = GROUP_MTF, display = display.none)
+dayCloud3FastLenInput  = input.int(50, title = "Day MA 3 Short Length",  minval = 1, group = GROUP_MTF, display = display.none)
+dayCloud3SlowLenInput  = input.int(55, title = "Day MA 3 Long Length",   minval = 1, group = GROUP_MTF, display = display.none)
+hourCloud4FastLenInput = input.int(34, title = "Hour MA 4 Short Length", minval = 1, group = GROUP_MTF, display = display.none)
+hourCloud4SlowLenInput = input.int(50, title = "Hour MA 4 Long Length",  minval = 1, group = GROUP_MTF, display = display.none)
+hourCloud5FastLenInput = input.int(50, title = "Hour MA 5 Short Length", minval = 1, group = GROUP_MTF, display = display.none)
+hourCloud5SlowLenInput = input.int(55, title = "Hour MA 5 Long Length",  minval = 1, group = GROUP_MTF, display = display.none)
 
-// 高周期均线：跟随 MA Type 设置（实时跟随当前未收盘的高周期K线）
+// 高周期均线：跟随 MA Type 设置（实时K线跟随未收盘的高周期K线，历史K线只显示已收盘的值）
 [dayFast1, daySlow1, dayFast2, daySlow2, dayFast3, daySlow3] = request.security(syminfo.tickerid, dayTfInput,
      [calcMa(dayCloud1FastLenInput), calcMa(dayCloud1SlowLenInput),
       calcMa(dayCloud2FastLenInput), calcMa(dayCloud2SlowLenInput),
@@ -208,7 +210,7 @@ dayCloud3Color  = color.new(color.purple, 85)
 hourCloud4Color = color.new(color.orange, 85)
 hourCloud5Color = color.new(color.fuchsia, 85)
 
-// editable=false により、Styleタブに個別の線色/太さ/線種ピッカーが表示されなくなる
+// editable=false：Style 标签页中不再显示每条线单独的颜色/粗细/线型设置
 dayCloud1FastPlot  = plot(showDayCloud1 ? dayFast1 : na, color = color.blue, offset = dayLeadInput, linewidth = 2, title = "Day MA 1 Short", editable = false, display = display.pane)
 dayCloud1SlowPlot  = plot(showDayCloud1 ? daySlow1 : na, color = color.blue, offset = dayLeadInput, linewidth = 2, title = "Day MA 1 Long",  editable = false, display = display.pane)
 
@@ -230,7 +232,7 @@ fill(dayCloud3FastPlot,  dayCloud3SlowPlot,  color = dayCloud3Color,  title = "D
 fill(hourCloud4FastPlot, hourCloud4SlowPlot, color = hourCloud4Color, title = "Hour MA 4 Cloud")
 fill(hourCloud5FastPlot, hourCloud5SlowPlot, color = hourCloud5Color, title = "Hour MA 5 Cloud")
 
-// --- Timeframe badge to the right of each MTF cloud (e.g. "1D", "1H", "1M", "30S") ---
+// --- 每个 MTF 云右侧的周期标签（例如 "1D"、"1H"、"1M"、"30S"） ---
 // 直接解析周期字符串，避免月线 (1M = 2628003 秒) 和秒级周期被误算成分钟
 formatTimeframe(tf) =>
     tfStr    = tf == "" ? timeframe.period : tf
@@ -268,13 +270,13 @@ if barstate.islast
     updateMtfLabel(hourLabel5, showMtfLabelsInput and showLabel5Input and showHourCloud5, hourFast5, hourSlow5, hourTfInput, hourCloud5FastLenInput, hourCloud5SlowLenInput, label5ColorInput, label5SizeInput)
 
 // ─────────────────────────────────────────────
-// 5-12 云翻转（移植自 Swing Dashboard，去掉警报，改为三角形）
+// Cloud2 翻转（默认 5-12）
 // 直接使用 Cloud 2 的两条线判断，与云变色同步
 // ─────────────────────────────────────────────
 isCloud2Bull = cloud2Fast >= cloud2Slow
 flipToBull   = isCloud2Bull and not isCloud2Bull[1]
 flipToBear   = not isCloud2Bull and isCloud2Bull[1]
 
-plotshape(flipToBull, title = "Cloud2 翻多", style = shape.triangleup,   location = location.belowbar, color = color.rgb(45, 96, 46), size = size.small, editable = false, display = display.pane)
-plotshape(flipToBear, title = "Cloud2 翻空", style = shape.triangledown, location = location.abovebar, color = #880b0bf5,            size = size.small, editable = false, display = display.pane)
+plotshape(flipToBull, title = "Cloud2 翻多", style = shape.triangleup,   location = location.belowbar, color = #2D602E,   size = size.small, editable = false, display = display.pane)
+plotshape(flipToBear, title = "Cloud2 翻空", style = shape.triangledown, location = location.abovebar, color = #880b0bf5, size = size.small, editable = false, display = display.pane)
 
