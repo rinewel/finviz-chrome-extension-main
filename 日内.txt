@@ -1,0 +1,987 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Mereep01
+
+//@version=6
+indicator('日内水平', '日内水平', overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500)
+
+import UkutaLabs/UkutaLabs_General_library/7 as ulgl
+
+// ─────────────────────────────────────────────
+// 价位显示模式
+// ─────────────────────────────────────────────
+enum LevelDisplay
+    allDays     // 显示所有天数
+    currentDay  // 只显示当天
+    mostRecent  // 最新价位横贯图表
+
+levelDisplayInput = input.string('Show lines and labels only for current day', title = 'Display', options = ['Show lines and labels for all days', 'Show lines and labels only for current day', 'Most recent Lvl across the chart'], group = 'Price level', display = display.none)
+levelDisplay = levelDisplayInput == 'Show lines and labels only for current day' ? LevelDisplay.currentDay : levelDisplayInput == 'Most recent Lvl across the chart' ? LevelDisplay.mostRecent : LevelDisplay.allDays
+
+//---------------------
+//USER VARIABLES
+//---------------------
+string pmDisplayModeInput = input.string(defval="Show", title="Display Mode", options=["Hidden", "Show"], group="Configuration",display = display.none)
+
+bool showLabelsInput = input.bool(defval=true, title="Show Labels", group="Label Settings",display = display.none)
+string labelSizeInput = input.string(defval="Small", title="Label Size", options=["Tiny", "Small", "Medium", "Large"], group="Label Settings",display = display.none)
+string labelHAlignInput = input.string(defval="Left", title="Label Alignment", options=["Left", "Center", "Right"], group="Label Settings",display = display.none)
+string labelVAlignInput = input.string(defval="Top", title="Text VAlignment", options=["Top", "Bottom"], group="Label Settings",display = display.none)
+
+pmSessionInput = input.session(defval="0400-0930", title="Premarket Session (EST)", group="Session",display = display.none)
+inPremarket = time(timeframe.period, pmSessionInput, "America/New_York")
+
+rthSessionInput = input.session(defval="0930-1600", title="US stock trading session (EST)", group="Session",display = display.none)
+inRth = time(timeframe.period, rthSessionInput, "America/New_York")
+
+orbDurationInput = input.int(30, "Opening Range Duration (Minutes)", minval=1, group="ORB 开盘区间", display = display.none)
+
+color pmShadeColorInput = input.color(defval=color.white, title="Premarket Shade Color", group="Premarket Area Settings",display = display.none)
+int pmShadeOpacityInput = input.int(defval=80, title="Shade Opacity", group="Premarket Area Settings",display = display.none)
+
+int pmLineWidthInput = input.int(defval=4,title="盘前线宽", group="Line Settings",display = display.none)
+string pmLineStyleInput = input.string(defval="Dashed",title="Line Style",options=["Dashed","Solid","Dotted"], group="Line Settings",display = display.none)
+
+color pmHighColorInput = input.color(defval=color.rgb(53, 165, 19), inline="1", title="High Color", group="Line Settings",display = display.none)
+color pmLowColorInput = input.color(defval=color.rgb(192, 20, 20), inline="1", title="Low Color", group="Line Settings",display = display.none)
+
+bool showPmQ75LineInput = input.bool(defval=false, title="Show 75% - ", inline="2", group="Line Settings",display = display.none)
+bool showPmMidLineInput = input.bool(defval=false, title="Show 50% - ", inline="3", group="Line Settings",display = display.none)
+bool showPmQ25LineInput = input.bool(defval=false, title="Show 25% - ", inline="4", group="Line Settings",display = display.none)
+bool showPmHighLineInput = input.bool(defval=true, title="显示盘前高点", inline="5", group="Line Settings",display = display.none)
+bool showPmLowLineInput = input.bool(defval=true, title="显示盘前低点", inline="6", group="Line Settings",display = display.none)
+bool showOrbInput = input.bool(defval=false, title="显示开盘区间", inline="7", group="Line Settings",display = display.none)
+bool showOrbBreakoutLabelsInput = input.bool(defval=false, title="显示开盘区间标签", inline="8", group="Line Settings",display = display.none)
+int pmLineExtendBarsInput = input.int(defval=5, title="盘前线右侧延伸(根数)", group="Line Settings",display = display.none)
+
+color pmQ75ColorInput = input.color(defval=color.new(#FFA500, 0), title="Color", inline="2", group="Line Settings",display = display.none)
+color pmMidColorInput = input.color(defval=color.new(#FFA500, 0), title="Color", inline="3", group="Line Settings",display = display.none)
+color pmQ25ColorInput = input.color(defval=color.new(#FFA500, 0), title="Color", inline="4", group="Line Settings",display = display.none)
+orbHighColorInput = input.color(color.new(#00ddff, 0), "Range High Color", group="ORB 开盘区间", display = display.none)
+orbLowColorInput = input.color(color.new(#ff00dd, 0), "Range Low Color", group="ORB 开盘区间", display = display.none)
+
+//---------------------
+//VARIABLES
+//---------------------
+var box pmShadeBox = na
+var line pmHighLine = na
+var line pmQ75Line = na
+var line pmMidLine = na
+var line pmQ25Line = na
+var line pmLowLine = na
+
+var float pmHigh = na
+var float pmQ75 = na
+var float pmMid = na
+var float pmQ25 = na
+var float pmLow = na
+
+var box pmHighTextBox = na
+var box pmQ75TextBox = na
+var box pmMidTextBox = na
+var box pmQ25TextBox = na
+var box pmLowTextBox = na
+
+var array<line> pmLineList = array.new<line>()
+var array<box> pmBoxList = array.new<box>()
+
+var bool isPremarket = false
+
+// 正在进行（或最近一个）RTH 交易日的跟踪值
+var float rthTrackHigh = na
+var float rthTrackLow = na
+var int rthTrackHighBar = na
+var int rthTrackLowBar = na
+var float rthTrackOpen = na
+var float rthTrackClose = na
+
+// 已结束的 RTH 交易日：Done1 = 最近一个，Done2 = 再前一个
+var float rthDone1High = na
+var float rthDone1Low = na
+var int rthDone1HighBar = na
+var int rthDone1LowBar = na
+var float rthDone1Open = na
+var float rthDone1Close = na
+var float rthDone2High = na
+var float rthDone2Low = na
+var int rthDone2HighBar = na
+var int rthDone2LowBar = na
+
+var bool isRth = false
+var bool rthDayOpen = false  // 当天 RTH 已开始、还没结算
+
+//---------------------
+//FUNCTIONS
+//---------------------
+// 没开盘前盘后数据时，9:30 就是交易时段首根，inRth[1] 不会是 na，所以额外用 session.isfirstbar 判断
+isRthStart()        => not na(inRth) and (na(inRth[1]) or session.isfirstbar)
+isRthEnd()          => na(inRth) and not na(inRth[1])
+isPremarketStart()  => not na(inPremarket) and na(inPremarket[1])
+isPremarketEnd()    => na(inPremarket) and not na(inPremarket[1])
+
+// 价位只在"持平"时才判断穿越，避免新一天价位跳变时误触发警报
+crossedUp(level)   => ta.crossover(close, level) and level == level[1]
+crossedDown(level) => ta.crossunder(close, level) and level == level[1]
+
+// 线型选项 → line.style_*（包括三种箭头）
+toLineStyle(opt) =>
+    switch opt
+        'dotted (┈)'      => line.style_dotted
+        'dashed (╌)'      => line.style_dashed
+        'arrow left (←)'  => line.style_arrow_left
+        'arrow right (→)' => line.style_arrow_right
+        'arrows both (↔)' => line.style_arrow_both
+        => line.style_solid
+
+toTextAlign(opt) =>
+    switch opt
+        'align center' => text.align_center
+        'align right'  => text.align_right
+        => text.align_left
+
+// 数值是否刚发生变化（只在变化时才更新绘图对象）
+changed(float x) => not na(x) and (na(x[1]) or x != x[1])
+
+// 数组只保留最近 MAX_TRACKED 个绘图对象，超出时删除最旧的（"显示所有天数"模式下防止无限增长）
+MAX_TRACKED = 500
+pushLine(array<line> list, line item) =>
+    array.push(list, item)
+    if array.size(list) > MAX_TRACKED
+        line.delete(array.shift(list))
+pushBox(array<box> list, box item) =>
+    array.push(list, item)
+    if array.size(list) > MAX_TRACKED
+        box.delete(array.shift(list))
+pushLabel(array<label> list, label item) =>
+    array.push(list, item)
+    if array.size(list) > MAX_TRACKED
+        label.delete(array.shift(list))
+
+//---------------------
+//RTH 常规时段跟踪（不受盘前 Display Mode 影响）
+//---------------------
+rthStartNow = isRthStart()
+// 结算当天 RTH：开了盘前盘后数据时在 16:00 后第一根；没开时在下一天 9:30 第一根（重置之前）
+rthDayCompleted = rthDayOpen and (isRthEnd() or rthStartNow)
+
+if rthDayCompleted
+    rthDone2High    := rthDone1High
+    rthDone2Low     := rthDone1Low
+    rthDone2HighBar := rthDone1HighBar
+    rthDone2LowBar  := rthDone1LowBar
+    rthDone1High    := rthTrackHigh
+    rthDone1Low     := rthTrackLow
+    rthDone1HighBar := rthTrackHighBar
+    rthDone1LowBar  := rthTrackLowBar
+    rthDone1Open    := rthTrackOpen
+    rthDone1Close   := rthTrackClose
+    rthDayOpen      := false
+    isRth           := false
+
+if rthStartNow
+    isRth           := true
+    rthDayOpen      := true
+    rthTrackHigh    := high
+    rthTrackLow     := low
+    rthTrackHighBar := bar_index
+    rthTrackLowBar  := bar_index
+    rthTrackOpen    := open
+
+if isRth
+    if high > rthTrackHigh
+        rthTrackHigh    := high
+        rthTrackHighBar := bar_index
+    if low < rthTrackLow
+        rthTrackLow    := low
+        rthTrackLowBar := bar_index
+    rthTrackClose := close
+
+//---------------------
+//PREMARKET 盘前
+//---------------------
+isMinuteTf = timeframe.isminutes and timeframe.multiplier < 60
+pmStartNow = isPremarketStart() and pmDisplayModeInput != "Hidden"
+pmEndNow   = isPremarketEnd()
+
+newPmLine(float price, color col) =>
+    line.new(bar_index, price, bar_index + pmLineExtendBarsInput, price, color = col, width = pmLineWidthInput, style = ulgl.GetLineStyle(pmLineStyleInput))
+
+newPmTextBox(float price, string txt, color col) =>
+    x = bar_index + pmLineExtendBarsInput
+    box.new(left = x, top = price, right = x, bottom = price, bgcolor = color.new(color.black, 100), border_color = na, text = txt + " (" + str.tostring(price, format.mintick) + ")", text_valign = ulgl.GetVAlign(labelVAlignInput), text_halign = ulgl.GetHAlign(labelHAlignInput), text_size = ulgl.GetFontSize(labelSizeInput), text_color = col)
+
+setPmLevel(line ln, box tb, float price, string txt) =>
+    line.set_y1(ln, price)
+    line.set_y2(ln, price)
+    box.set_top(tb, price)
+    box.set_bottom(tb, price)
+    box.set_text(tb, txt + " (" + str.tostring(price, format.mintick) + ")")
+
+setPmRight(line ln, box tb, int x) =>
+    line.set_x2(ln, x)
+    box.set_left(tb, x)
+    box.set_right(tb, x)
+
+if pmStartNow
+    if levelDisplay == LevelDisplay.allDays
+        // 显示所有天数：前一天的盘前线和标签定格在上一根K线的位置
+        prevRightX = bar_index - 1 + pmLineExtendBarsInput
+        setPmRight(pmHighLine, pmHighTextBox, prevRightX)
+        setPmRight(pmQ75Line, pmQ75TextBox, prevRightX)
+        setPmRight(pmMidLine, pmMidTextBox, prevRightX)
+        setPmRight(pmQ25Line, pmQ25TextBox, prevRightX)
+        setPmRight(pmLowLine, pmLowTextBox, prevRightX)
+    else
+        // 只显示当天 / 最新价位：先删除前一天的盘前线、标签和阴影
+        while array.size(pmLineList) > 0
+            line.delete(array.pop(pmLineList))
+        while array.size(pmBoxList) > 0
+            box.delete(array.pop(pmBoxList))
+    isPremarket   := true
+    pmHigh        := high
+    pmLow         := low
+    pmShadeBox    := na
+    pmHighLine    := na
+    pmQ75Line     := na
+    pmMidLine     := na
+    pmQ25Line     := na
+    pmLowLine     := na
+    pmHighTextBox := na
+    pmQ75TextBox  := na
+    pmMidTextBox  := na
+    pmQ25TextBox  := na
+    pmLowTextBox  := na
+
+if pmEndNow
+    isPremarket := false
+    box.set_right(pmShadeBox, bar_index - 1)
+
+if isPremarket
+    pmHigh := math.max(pmHigh, high)
+    pmLow  := math.min(pmLow, low)
+
+// 分位价位每根只算一次
+pmQ75 := pmHigh - (pmHigh - pmLow) / 4
+pmMid := (pmHigh + pmLow) / 2
+pmQ25 := pmLow + (pmHigh - pmLow) / 4
+
+if pmStartNow and isMinuteTf
+    pmShadeBox := box.new(left = bar_index, top = pmHigh, right = bar_index, bottom = pmLow, bgcolor = color.new(pmShadeColorInput, pmShadeOpacityInput), border_color = na)
+    pushBox(pmBoxList, pmShadeBox)
+    if showPmHighLineInput
+        pmHighLine := newPmLine(pmHigh, pmHighColorInput)
+        pushLine(pmLineList, pmHighLine)
+    if showPmQ75LineInput
+        pmQ75Line := newPmLine(pmQ75, pmQ75ColorInput)
+        pushLine(pmLineList, pmQ75Line)
+    if showPmMidLineInput
+        pmMidLine := newPmLine(pmMid, pmMidColorInput)
+        pushLine(pmLineList, pmMidLine)
+    if showPmQ25LineInput
+        pmQ25Line := newPmLine(pmQ25, pmQ25ColorInput)
+        pushLine(pmLineList, pmQ25Line)
+    if showPmLowLineInput
+        pmLowLine := newPmLine(pmLow, pmLowColorInput)
+        pushLine(pmLineList, pmLowLine)
+    if showLabelsInput
+        if showPmHighLineInput
+            pmHighTextBox := newPmTextBox(pmHigh, "盘前高点", pmHighColorInput)
+            pushBox(pmBoxList, pmHighTextBox)
+        if showPmQ75LineInput
+            pmQ75TextBox := newPmTextBox(pmQ75, "75%", pmQ75ColorInput)
+            pushBox(pmBoxList, pmQ75TextBox)
+        if showPmMidLineInput
+            pmMidTextBox := newPmTextBox(pmMid, "50%", pmMidColorInput)
+            pushBox(pmBoxList, pmMidTextBox)
+        if showPmQ25LineInput
+            pmQ25TextBox := newPmTextBox(pmQ25, "25%", pmQ25ColorInput)
+            pushBox(pmBoxList, pmQ25TextBox)
+        if showPmLowLineInput
+            pmLowTextBox := newPmTextBox(pmLow, "盘前低点", pmLowColorInput)
+            pushBox(pmBoxList, pmLowTextBox)
+
+// 盘前高低点变化时才更新价格（没创建的对象是 na，调用不会有任何效果）
+pmHighChanged = changed(pmHigh)  // 分开计算，避免 or 短路导致历史不一致
+pmLowChanged  = changed(pmLow)
+if isPremarket and not pmStartNow and (pmHighChanged or pmLowChanged)
+    box.set_top(pmShadeBox, pmHigh)
+    box.set_bottom(pmShadeBox, pmLow)
+    setPmLevel(pmHighLine, pmHighTextBox, pmHigh, "盘前高点")
+    setPmLevel(pmQ75Line, pmQ75TextBox, pmQ75, "75%")
+    setPmLevel(pmMidLine, pmMidTextBox, pmMid, "50%")
+    setPmLevel(pmQ25Line, pmQ25TextBox, pmQ25, "25%")
+    setPmLevel(pmLowLine, pmLowTextBox, pmLow, "盘前低点")
+
+// 横向位置只需要在最后一根K线上更新（历史上的在下一次盘前开始时定格）
+if barstate.islast
+    if isPremarket
+        box.set_right(pmShadeBox, bar_index)
+    pmRightX = bar_index + pmLineExtendBarsInput
+    setPmRight(pmHighLine, pmHighTextBox, pmRightX)
+    setPmRight(pmQ75Line, pmQ75TextBox, pmRightX)
+    setPmRight(pmMidLine, pmMidTextBox, pmRightX)
+    setPmRight(pmQ25Line, pmQ25TextBox, pmRightX)
+    setPmRight(pmLowLine, pmLowTextBox, pmRightX)
+
+//---------------------
+//PRICE LEVEL 输入
+//---------------------
+showPrevHighLineInput = input.bool(true, title = '前一日最高价', group = 'Price level', inline = 'PrevHigh',display = display.none)
+showPrevLowLineInput = input.bool(true, title = '前一日最低价', group = 'Price level', inline = 'PrevLow',display = display.none)
+showPrevDayHigh2LineInput = input.bool(false, title = '前两天最高点', group = 'Price level', inline = 'PrevHigh2',display = display.none)
+showPrevDayLow2LineInput = input.bool(false, title = '前两天最低点', group = 'Price level', inline = 'PrevLow2',display = display.none)
+showPrevOpenLineInput = input.bool(false, title = '前一日开盘价', group = 'Price level', inline = 'PrevOpen',display = display.none)
+showCdoLineInput = input.bool(true, title = '当日开盘价(CDO)', group = 'Price level', inline = 'Cdo',display = display.none)
+// CDO = 当日开盘价 (Current Day Open)；PDCP = 前一日控制点 (Previous Day Control Point) = 前一日最高价与最低价的中点
+showPdcpLineInput = input.bool(false, title = 'PDCP 前一日控制点', group = 'Price level', inline = 'Pdcp',display = display.none)
+showPrevCloseLineInput = input.bool(false, title = '前一日收盘价', group = 'Price level', inline = 'PrevClose',display = display.none)
+showAhHighLineInput = input.bool(false, title = '盘后高点', group = 'Price level', inline = 'afterHigh',display = display.none)
+showAhLowLineInput = input.bool(false, title = '盘后低点', group = 'Price level', inline = 'afterLow',display = display.none)
+showDayHighLineInput = input.bool(false, title = '日内高点', group = 'Price level', inline = 'DayHigh',display = display.none)
+showDayLowLineInput = input.bool(false, title = '日内低点', group = 'Price level', inline = 'DayLow',display = display.none)
+showPrevWkHighLineInput = input.bool(true, title = '上周最高价', group = 'Price level', inline = 'PrevWkHigh',display = display.none)
+showPrevWkLowLineInput = input.bool(true, title = '上周最低价', group = 'Price level', inline = 'PrevWkLow',display = display.none)
+showWkHighLineInput = input.bool(false, title = '本周最高点', group = 'Price level', inline = 'WkHigh',display = display.none)
+showWkLowLineInput = input.bool(false, title = '本周最低点', group = 'Price level', inline = 'WkLow',display = display.none)
+showRthOpenLineInput = input.bool(false, title = '9:30开盘价', group = 'Price level', inline = 'RthOpen',display = display.none)
+showRthCloseLineInput = input.bool(false, title = '16:00收盘价', group = 'Price level', inline = 'RthClose',display = display.none)
+
+showPrevHighOnAxisInput = input.bool(true, title = '前一日最高价', group = 'Price axis',display = display.none)
+showPrevLowOnAxisInput = input.bool(true, title = '前一日最低价', group = 'Price axis',display = display.none)
+showPrevDayHigh2OnAxisInput = input.bool(false, title = '前两天最高点', group = 'Price axis',display = display.none)
+showPrevDayLow2OnAxisInput = input.bool(false, title = '前两天最低点', group = 'Price axis',display = display.none)
+showPrevOpenOnAxisInput = input.bool(false, title = '前一日开盘价', group = 'Price axis',display = display.none)
+showCdoOnAxisInput = input.bool(true, title = '当日开盘价(CDO)', group = 'Price axis',display = display.none)
+showPdcpOnAxisInput = input.bool(false, title = 'PDCP 前一日控制点(高低中点)', group = 'Price axis',display = display.none)
+showPrevCloseOnAxisInput = input.bool(false, title = '前一日收盘价', group = 'Price axis',display = display.none)
+showAhHighOnAxisInput = input.bool(false, title = '盘后高点', group = 'Price axis',display = display.none)
+showAhLowOnAxisInput = input.bool(false, title = '盘后低点', group = 'Price axis',display = display.none)
+showDayHighOnAxisInput = input.bool(false, title = '日内高点', group = 'Price axis',display = display.none)
+showDayLowOnAxisInput = input.bool(false, title = '日内低点', group = 'Price axis',display = display.none)
+showPrevWkHighOnAxisInput = input.bool(true, title = '上周最高价', group = 'Price axis',display = display.none)
+showPrevWkLowOnAxisInput = input.bool(true, title = '上周最低价', group = 'Price axis',display = display.none)
+showWkHighOnAxisInput = input.bool(false, title = '本周最高点', group = 'Price axis',display = display.none)
+showWkLowOnAxisInput = input.bool(false, title = '本周最低点', group = 'Price axis',display = display.none)
+showRthOpenOnAxisInput = input.bool(true, title = '9:30开盘价', group = 'Price axis',display = display.none)
+showRthCloseOnAxisInput = input.bool(true, title = '16:00收盘价', group = 'Price axis',display = display.none)
+
+showPrevHighLabelInput = input.bool(true, title = '前一日最高价', group = 'Label', inline = 'PrevHigh',display = display.none)
+showPrevLowLabelInput = input.bool(true, title = '前一日最低价', group = 'Label', inline = 'PrevLow',display = display.none)
+showPrevDayHigh2LabelInput = input.bool(false, title = '前两天最高点', group = 'Label', inline = 'PrevHigh2',display = display.none)
+showPrevDayLow2LabelInput = input.bool(false, title = '前两天最低点', group = 'Label', inline = 'PrevLow2',display = display.none)
+showPrevOpenLabelInput = input.bool(false, title = '前一日开盘价', group = 'Label', inline = 'PrevOpen',display = display.none)
+showCdoLabelInput = input.bool(true, title = '当日开盘价(CDO)', group = 'Label', inline = 'Cdo',display = display.none)
+showPdcpLabelInput = input.bool(false, title = 'PDCP 前一日控制点', group = 'Label', inline = 'Pdcp',display = display.none)
+showPrevCloseLabelInput = input.bool(false, title = '前一日收盘价', group = 'Label', inline = 'PrevClose',display = display.none)
+showAhHighLabelInput = input.bool(false, title = '盘后高点', group = 'Label', inline = 'afterHigh',display = display.none)
+showAhLowLabelInput = input.bool(false, title = '盘后低点', group = 'Label', inline = 'afterLow',display = display.none)
+showDayHighLabelInput = input.bool(false, title = '日内高点', group = 'Label', inline = 'DayHigh',display = display.none)
+showDayLowLabelInput = input.bool(false, title = '日内低点', group = 'Label', inline = 'DayLow',display = display.none)
+showPrevWkHighLabelInput = input.bool(true, title = '上周最高价', group = 'Label', inline = 'PrevWkHigh',display = display.none)
+showPrevWkLowLabelInput = input.bool(true, title = '上周最低价', group = 'Label', inline = 'PrevWkLow',display = display.none)
+showWkHighLabelInput = input.bool(false, title = '本周最高价', group = 'Label', inline = 'WkHigh',display = display.none)
+showWkLowLabelInput = input.bool(false, title = '本周最低价', group = 'Label', inline = 'WkLow',display = display.none)
+showRthOpenLabelInput = input.bool(false, title = '9:30开盘价', group = 'Label', inline = 'RthOpen',display = display.none)
+showRthCloseLabelInput = input.bool(false, title = '16:00收盘价', group = 'Label', inline = 'RthClose',display = display.none)
+
+showPrevHighLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'PrevHigh',display = display.none)
+showPrevLowLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'PrevLow',display = display.none)
+showPrevDayHigh2LabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'PrevHigh2',display = display.none)
+showPrevDayLow2LabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'PrevLow2',display = display.none)
+showPrevOpenLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'PrevOpen',display = display.none)
+showCdoLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'Cdo',display = display.none)
+showPdcpLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'Pdcp',display = display.none)
+showPrevCloseLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'PrevClose',display = display.none)
+showAhHighLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'afterHigh',display = display.none)
+showAhLowLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'afterLow',display = display.none)
+showDayHighLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'DayHigh',display = display.none)
+showDayLowLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'DayLow',display = display.none)
+showPrevWkHighLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'PrevWkHigh',display = display.none)
+showPrevWkLowLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'PrevWkLow',display = display.none)
+showWkHighLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'WkHigh',display = display.none)
+showWkLowLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'WkLow',display = display.none)
+showRthOpenLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'RthOpen',display = display.none)
+showRthCloseLabelPriceInput = input.bool(true, title = 'Display price after label text', group = 'Label', inline = 'RthClose',display = display.none)
+
+prevHighLabelOffsetInput = input.int(1, title = 'Prev day high label offset from last bar', group = 'Label',display = display.none)
+prevLowLabelOffsetInput = input.int(1, title = 'Prev day low label offset from last bar', group = 'Label',display = display.none)
+prevDayHigh2LabelOffsetInput = input.int(1, title = 'Prev. Day 2 high label offset from last bar', group = 'Label',display = display.none)
+prevDayLow2LabelOffsetInput = input.int(1, title = 'Prev. Day 2 low label offset from last bar', group = 'Label',display = display.none)
+prevOpenLabelOffsetInput = input.int(1, title = 'Prev day Open label offset from last bar', group = 'Label',display = display.none)
+cdoLabelOffsetInput = input.int(1, title = 'day Open label offset from last bar', group = 'Label',display = display.none)
+pdcpLabelOffsetInput = input.int(1, title = 'PDCP label offset from last bar', group = 'Label',display = display.none)
+prevCloseLabelOffsetInput = input.int(1, title = 'Prev day close label offset from last bar', group = 'Label',display = display.none)
+ahHighLabelOffsetInput = input.int(1, title = 'After-hour high label offset from last bar', group = 'Label',display = display.none)
+ahLowLabelOffsetInput = input.int(1, title = 'After-hour Low label offset from last bar', group = 'Label',display = display.none)
+dayHighLabelOffsetInput = input.int(1, title = 'Day high label offset from last bar', group = 'Label',display = display.none)
+dayLowLabelOffsetInput = input.int(1, title = 'Day low label offset from last bar', group = 'Label',display = display.none)
+prevWkHighLabelOffsetInput = input.int(1, title = 'Prev Week high label offset from last bar', group = 'Label',display = display.none)
+prevWkLowLabelOffsetInput = input.int(1, title = 'Prev Week Low label offset from last bar', group = 'Label',display = display.none)
+wkHighLabelOffsetInput = input.int(1, title = 'Week high label offset from last bar', group = 'Label',display = display.none)
+wkLowLabelOffsetInput = input.int(1, title = 'Week Low label offset from last bar', group = 'Label',display = display.none)
+rthOpenLabelOffsetInput = input.int(1, title = '9:30 open label offset from last bar', group = 'Label',display = display.none)
+rthCloseLabelOffsetInput = input.int(1, title = '16:00 close label offset from last bar', group = 'Label',display = display.none)
+
+prevHighLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'PrevHigh',display = display.none)
+prevLowLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'PrevLow',display = display.none)
+prevDayHigh2LabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'PrevHigh2',display = display.none)
+prevDayLow2LabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'PrevLow2',display = display.none)
+prevOpenLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'PrevOpen',display = display.none)
+cdoLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'Cdo',display = display.none)
+pdcpLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'Pdcp',display = display.none)
+prevCloseLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'PrevClose',display = display.none)
+ahHighLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'afterHigh',display = display.none)
+ahLowLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'afterLow',display = display.none)
+dayHighLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'DayHigh',display = display.none)
+dayLowLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'DayLow',display = display.none)
+prevWkHighLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'PrevWkHigh',display = display.none)
+prevWkLowLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'PrevWkLow',display = display.none)
+wkHighLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'WkHigh',display = display.none)
+wkLowLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'WkLow',display = display.none)
+rthOpenLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'RthOpen',display = display.none)
+rthCloseLabelAlignInput = input.string('align left', title = '', options = ['align left', 'align center', 'align right'], group = 'Label', inline = 'RthClose',display = display.none)
+
+prevHighLabelTextInput = input.string('前一日最高价 ', title = 'Text', group = 'Label', inline = 'PrevHigh',display = display.none)
+prevLowLabelTextInput = input.string('前一日最低价 ', title = 'Text', group = 'Label', inline = 'PrevLow',display = display.none)
+prevDayHigh2LabelTextInput = input.string('前两日最高价 ', title = 'Text', group = 'Label', inline = 'PrevHigh2',display = display.none)
+prevDayLow2LabelTextInput = input.string('前两日最低价 ', title = 'Text', group = 'Label', inline = 'PrevLow2',display = display.none)
+prevOpenLabelTextInput = input.string('前一日开盘价 ', title = 'Text', group = 'Label', inline = 'PrevOpen',display = display.none)
+cdoLabelTextInput = input.string('当日开盘价(CDO) ', title = 'Text', group = 'Label', inline = 'Cdo',display = display.none)
+pdcpLabelTextInput = input.string('PDCP前日控制点 ', title = 'Text', group = 'Label', inline = 'Pdcp',display = display.none)
+prevCloseLabelTextInput = input.string('前一日收盘价 ', title = 'Text', group = 'Label', inline = 'PrevClose',display = display.none)
+ahHighLabelTextInput = input.string('盘后高点 ', title = 'Text', group = 'Label', inline = 'afterHigh',display = display.none)
+ahLowLabelTextInput = input.string('盘后低点 ', title = 'Text', group = 'Label', inline = 'afterLow',display = display.none)
+dayHighLabelTextInput = input.string('日内高点 ', title = 'Text', group = 'Label', inline = 'DayHigh',display = display.none)
+dayLowLabelTextInput = input.string('日内低点 ', title = 'Text', group = 'Label', inline = 'DayLow',display = display.none)
+prevWkHighLabelTextInput = input.string('上周最高价 ', title = 'Text', group = 'Label', inline = 'PrevWkHigh',display = display.none)
+prevWkLowLabelTextInput = input.string('上周最低价 ', title = 'Text', group = 'Label', inline = 'PrevWkLow',display = display.none)
+wkHighLabelTextInput = input.string('本周最高价 ', title = 'Text', group = 'Label', inline = 'WkHigh',display = display.none)
+wkLowLabelTextInput = input.string('本周最低价 ', title = 'Text', group = 'Label', inline = 'WkLow',display = display.none)
+rthOpenLabelTextInput = input.string('9:30开盘价 ', title = 'Text', group = 'Label', inline = 'RthOpen',display = display.none)
+rthCloseLabelTextInput = input.string('16:00收盘价 ', title = 'Text', group = 'Label', inline = 'RthClose',display = display.none)
+
+prevHighLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'PrevHigh',display = display.none)
+prevLowLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'PrevLow',display = display.none)
+prevDayHigh2LabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'PrevHigh2',display = display.none)
+prevDayLow2LabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'PrevLow2',display = display.none)
+prevOpenLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'PrevOpen',display = display.none)
+cdoLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'Cdo',display = display.none)
+pdcpLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'Pdcp',display = display.none)
+prevCloseLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'PrevClose',display = display.none)
+ahHighLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'afterHigh',display = display.none)
+ahLowLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'afterLow',display = display.none)
+dayHighLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'DayHigh',display = display.none)
+dayLowLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'DayLow',display = display.none)
+prevWkHighLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'PrevWkHigh',display = display.none)
+prevWkLowLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'PrevWkLow',display = display.none)
+wkHighLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'WkHigh',display = display.none)
+wkLowLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'WkLow',display = display.none)
+rthOpenLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'RthOpen',display = display.none)
+rthCloseLabelTextColorInput = input.color(title = '', defval = #000000, group = 'Label', inline = 'RthClose',display = display.none)
+
+//---------------------
+//价格轴显示的周期范围
+//---------------------
+showOnSecondsInput = input.bool(true, title = 'Seconds', group = 'Price axis visibility', inline = 'second',display = display.none)
+showOnMinutesInput = input.bool(true, title = 'Minutes', group = 'Price axis visibility', inline = 'minute',display = display.none)
+showOnHoursInput = input.bool(true, title = 'Hours', group = 'Price axis visibility', inline = 'hour',display = display.none)
+showOnDaysInput = input.bool(true, title = 'Days', group = 'Price axis visibility', inline = 'day',display = display.none)
+showOnWeeksInput = input.bool(false, title = 'Weeks', group = 'Price axis visibility', inline = 'week',display = display.none)
+showOnMonthsInput = input.bool(false, title = 'Months', group = 'Price axis visibility', inline = 'month',display = display.none)
+
+secondsMinInput = input.int(1, '', 1, 59, group = 'Price axis visibility', inline = 'second',display = display.none)
+secondsMaxInput = input.int(59, '-', 1, 59, group = 'Price axis visibility', inline = 'second',display = display.none)
+minutesMinInput = input.int(1, '', 1, 59, group = 'Price axis visibility', inline = 'minute',display = display.none)
+minutesMaxInput = input.int(59, '-', 1, 59, group = 'Price axis visibility', inline = 'minute',display = display.none)
+hoursMinInput = input.int(1, '', 1, 24, group = 'Price axis visibility', inline = 'hour',display = display.none)
+hoursMaxInput = input.int(24, '-', 1, 24, group = 'Price axis visibility', inline = 'hour',display = display.none)
+daysMinInput = input.int(1, '', 1, 366, group = 'Price axis visibility', inline = 'day',display = display.none)
+daysMaxInput = input.int(366, '-', 1, 366, group = 'Price axis visibility', inline = 'day',display = display.none)
+weeksMinInput = input.int(1, '', 1, 52, group = 'Price axis visibility', inline = 'week',display = display.none)
+weeksMaxInput = input.int(52, '-', 1, 52, group = 'Price axis visibility', inline = 'week',display = display.none)
+monthsMinInput = input.int(1, '', 1, 12, group = 'Price axis visibility', inline = 'month',display = display.none)
+monthsMaxInput = input.int(12, '-', 1, 12, group = 'Price axis visibility', inline = 'month',display = display.none)
+
+tfMult = timeframe.multiplier
+isAxisVisibleTf = (showOnSecondsInput and timeframe.isseconds and tfMult >= secondsMinInput and tfMult <= secondsMaxInput)
+     or (showOnMinutesInput and timeframe.isminutes and tfMult >= minutesMinInput and tfMult <= minutesMaxInput)
+     or (showOnHoursInput and timeframe.isminutes and tfMult >= hoursMinInput * 60 and tfMult <= hoursMaxInput * 60)
+     or (showOnDaysInput and timeframe.isdaily and tfMult >= daysMinInput and tfMult <= daysMaxInput)
+     or (showOnWeeksInput and timeframe.isweekly and tfMult >= weeksMinInput and tfMult <= weeksMaxInput)
+     or (showOnMonthsInput and timeframe.ismonthly and tfMult >= monthsMinInput and tfMult <= monthsMaxInput)
+
+//---------------------
+//线条颜色 / 粗细 / 样式
+//---------------------
+prevHighColorInput = input.color(title = '', defval = #00ff00, group = 'Price level', inline = 'PrevHigh',display = display.none)
+prevLowColorInput = input.color(title = '', defval = #ff80ff, group = 'Price level', inline = 'PrevLow',display = display.none)
+prevDayHigh2ColorInput = input.color(title = '', defval = color.new(#069494, 0), group = 'Price level', inline = 'PrevHigh2',display = display.none)
+prevDayLow2ColorInput = input.color(title = '', defval = color.new(#FFA500, 0), group = 'Price level', inline = 'PrevLow2',display = display.none)
+prevOpenColorInput = input.color(title = '', defval = color.rgb(255, 255, 0), group = 'Price level', inline = 'PrevOpen',display = display.none)
+cdoColorInput = input.color(title = '', defval = color.rgb(90, 147, 158), group = 'Price level', inline = 'Cdo',display = display.none)
+pdcpColorInput = input.color(title = '', defval = color.rgb(255, 140, 0), group = 'Price level', inline = 'Pdcp',display = display.none)
+prevCloseColorInput = input.color(title = '', defval = color.rgb(255, 255, 0), group = 'Price level', inline = 'PrevClose',display = display.none)
+ahHighColorInput = input.color(title = '', defval = #64b4f6, group = 'Price level', inline = 'afterHigh',display = display.none)
+ahLowColorInput = input.color(title = '', defval = #8080ff, group = 'Price level', inline = 'afterLow',display = display.none)
+dayHighColorInput = input.color(title = '', defval = color.rgb(0, 255, 191), group = 'Price level', inline = 'DayHigh',display = display.none)
+dayLowColorInput = input.color(title = '', defval = color.rgb(0, 255, 191), group = 'Price level', inline = 'DayLow',display = display.none)
+prevWkHighColorInput = input.color(title = '', defval = #0080ff, group = 'Price level', inline = 'PrevWkHigh',display = display.none)
+prevWkLowColorInput = input.color(title = '', defval = #ff0000, group = 'Price level', inline = 'PrevWkLow',display = display.none)
+wkHighColorInput = input.color(title = '', defval = #64b4f6, group = 'Price level', inline = 'WkHigh',display = display.none)
+wkLowColorInput = input.color(title = '', defval = #ff00ff, group = 'Price level', inline = 'WkLow',display = display.none)
+rthOpenColorInput = input.color(title = '', defval = color.rgb(255, 165, 0), group = 'Price level', inline = 'RthOpen',display = display.none)
+rthCloseColorInput = input.color(title = '', defval = color.rgb(0, 191, 255), group = 'Price level', inline = 'RthClose',display = display.none)
+
+prevHighLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'PrevHigh',display = display.none)
+prevLowLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'PrevLow',display = display.none)
+prevDayHigh2LineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'PrevHigh2',display = display.none)
+prevDayLow2LineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'PrevLow2',display = display.none)
+prevOpenLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'PrevOpen',display = display.none)
+cdoLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'Cdo',display = display.none)
+pdcpLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'Pdcp',display = display.none)
+prevCloseLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'PrevClose',display = display.none)
+ahHighLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'afterHigh',display = display.none)
+ahLowLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'afterLow',display = display.none)
+dayHighLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'DayHigh',display = display.none)
+dayLowLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'DayLow',display = display.none)
+prevWkHighLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'PrevWkHigh',display = display.none)
+prevWkLowLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'PrevWkLow',display = display.none)
+wkHighLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'WkHigh',display = display.none)
+wkLowLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'WkLow',display = display.none)
+rthOpenLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'RthOpen',display = display.none)
+rthCloseLineWidthInput = input.int(2, 'Thickness', group = 'Price level', inline = 'RthClose',display = display.none)
+
+prevHighLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'PrevHigh',display = display.none)
+prevLowLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'PrevLow',display = display.none)
+prevDayHigh2LineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'PrevHigh2',display = display.none)
+prevDayLow2LineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'PrevLow2',display = display.none)
+prevOpenLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'PrevOpen',display = display.none)
+cdoLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'Cdo',display = display.none)
+pdcpLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'Pdcp',display = display.none)
+prevCloseLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'PrevClose',display = display.none)
+ahHighLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'afterHigh',display = display.none)
+ahLowLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'afterLow',display = display.none)
+dayHighLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'DayHigh',display = display.none)
+dayLowLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'DayLow',display = display.none)
+prevWkHighLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'PrevWkHigh',display = display.none)
+prevWkLowLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'PrevWkLow',display = display.none)
+wkHighLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'WkHigh',display = display.none)
+wkLowLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'WkLow',display = display.none)
+rthOpenLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'RthOpen',display = display.none)
+rthCloseLineStyleInput = input.string('solid (─)', title = '', options = ['solid (─)', 'dotted (┈)', 'dashed (╌)', 'arrow left (←)', 'arrow right (→)', 'arrows both (↔)'], group = 'Price level', inline = 'RthClose',display = display.none)
+
+//---------------------
+//价位对象：每组价位 = 输入设置 + 当前的线和标签
+//---------------------
+type Level
+    bool   showLine
+    bool   showLabel
+    bool   showPrice
+    int    labelOffset
+    string labelText
+    color  textColor
+    string textAlign
+    color  lineColor
+    int    lineWidth
+    string lineStyle
+    line   ln  = na
+    label  lbl = na
+
+// 画新的线和标签（x1 = 线的起点，na 时从当前K线开始）
+method draw(Level this, float price, int x1) =>
+    lineExtend = levelDisplay == LevelDisplay.mostRecent ? extend.both : extend.right
+    if this.showLine
+        this.ln := line.new(na(x1) ? bar_index : x1, price, bar_index + 1, price, color = this.lineColor, style = this.lineStyle, width = this.lineWidth, extend = lineExtend)
+    if this.showLabel
+        this.lbl := label.new(bar_index + this.labelOffset, price, text = this.showPrice ? this.labelText + str.tostring(price, format.mintick) : this.labelText, color = this.lineColor, style = label.style_label_left, textcolor = this.textColor, size = size.normal, textalign = this.textAlign)
+    this
+
+// 停掉旧的线和标签：显示所有天数时定格在上一根K线，否则删除
+method retire(Level this) =>
+    if levelDisplay == LevelDisplay.allDays
+        line.set_x2(this.ln, bar_index - 1)
+        line.set_extend(this.ln, extend.none)
+        label.set_x(this.lbl, bar_index - 1 + this.labelOffset)
+    else
+        line.delete(this.ln)
+        label.delete(this.lbl)
+    this.ln  := na
+    this.lbl := na
+    this
+
+// 价位变动时移动线和标签（x1 = 新起点，na 表示起点不变）
+method moveTo(Level this, float price, int x1) =>
+    if not na(x1)
+        line.set_x1(this.ln, x1)
+    line.set_x2(this.ln, bar_index + 1)
+    line.set_y1(this.ln, price)
+    line.set_y2(this.ln, price)
+    label.set_y(this.lbl, price)
+    if this.showPrice
+        label.set_text(this.lbl, this.labelText + str.tostring(price, format.mintick))
+    this
+
+// 标签跟随最后一根K线
+method placeLabel(Level this) =>
+    label.set_x(this.lbl, bar_index + this.labelOffset)
+    this
+
+var Level prevHighLv = Level.new(showPrevHighLineInput, showPrevHighLabelInput, showPrevHighLabelPriceInput, prevHighLabelOffsetInput, prevHighLabelTextInput, prevHighLabelTextColorInput, toTextAlign(prevHighLabelAlignInput), prevHighColorInput, prevHighLineWidthInput, toLineStyle(prevHighLineStyleInput))
+var Level prevLowLv = Level.new(showPrevLowLineInput, showPrevLowLabelInput, showPrevLowLabelPriceInput, prevLowLabelOffsetInput, prevLowLabelTextInput, prevLowLabelTextColorInput, toTextAlign(prevLowLabelAlignInput), prevLowColorInput, prevLowLineWidthInput, toLineStyle(prevLowLineStyleInput))
+var Level prevDayHigh2Lv = Level.new(showPrevDayHigh2LineInput, showPrevDayHigh2LabelInput, showPrevDayHigh2LabelPriceInput, prevDayHigh2LabelOffsetInput, prevDayHigh2LabelTextInput, prevDayHigh2LabelTextColorInput, toTextAlign(prevDayHigh2LabelAlignInput), prevDayHigh2ColorInput, prevDayHigh2LineWidthInput, toLineStyle(prevDayHigh2LineStyleInput))
+var Level prevDayLow2Lv = Level.new(showPrevDayLow2LineInput, showPrevDayLow2LabelInput, showPrevDayLow2LabelPriceInput, prevDayLow2LabelOffsetInput, prevDayLow2LabelTextInput, prevDayLow2LabelTextColorInput, toTextAlign(prevDayLow2LabelAlignInput), prevDayLow2ColorInput, prevDayLow2LineWidthInput, toLineStyle(prevDayLow2LineStyleInput))
+var Level prevOpenLv = Level.new(showPrevOpenLineInput, showPrevOpenLabelInput, showPrevOpenLabelPriceInput, prevOpenLabelOffsetInput, prevOpenLabelTextInput, prevOpenLabelTextColorInput, toTextAlign(prevOpenLabelAlignInput), prevOpenColorInput, prevOpenLineWidthInput, toLineStyle(prevOpenLineStyleInput))
+var Level cdoLv = Level.new(showCdoLineInput, showCdoLabelInput, showCdoLabelPriceInput, cdoLabelOffsetInput, cdoLabelTextInput, cdoLabelTextColorInput, toTextAlign(cdoLabelAlignInput), cdoColorInput, cdoLineWidthInput, toLineStyle(cdoLineStyleInput))
+var Level pdcpLv = Level.new(showPdcpLineInput, showPdcpLabelInput, showPdcpLabelPriceInput, pdcpLabelOffsetInput, pdcpLabelTextInput, pdcpLabelTextColorInput, toTextAlign(pdcpLabelAlignInput), pdcpColorInput, pdcpLineWidthInput, toLineStyle(pdcpLineStyleInput))
+var Level prevCloseLv = Level.new(showPrevCloseLineInput, showPrevCloseLabelInput, showPrevCloseLabelPriceInput, prevCloseLabelOffsetInput, prevCloseLabelTextInput, prevCloseLabelTextColorInput, toTextAlign(prevCloseLabelAlignInput), prevCloseColorInput, prevCloseLineWidthInput, toLineStyle(prevCloseLineStyleInput))
+var Level ahHighLv = Level.new(showAhHighLineInput, showAhHighLabelInput, showAhHighLabelPriceInput, ahHighLabelOffsetInput, ahHighLabelTextInput, ahHighLabelTextColorInput, toTextAlign(ahHighLabelAlignInput), ahHighColorInput, ahHighLineWidthInput, toLineStyle(ahHighLineStyleInput))
+var Level ahLowLv = Level.new(showAhLowLineInput, showAhLowLabelInput, showAhLowLabelPriceInput, ahLowLabelOffsetInput, ahLowLabelTextInput, ahLowLabelTextColorInput, toTextAlign(ahLowLabelAlignInput), ahLowColorInput, ahLowLineWidthInput, toLineStyle(ahLowLineStyleInput))
+var Level dayHighLv = Level.new(showDayHighLineInput, showDayHighLabelInput, showDayHighLabelPriceInput, dayHighLabelOffsetInput, dayHighLabelTextInput, dayHighLabelTextColorInput, toTextAlign(dayHighLabelAlignInput), dayHighColorInput, dayHighLineWidthInput, toLineStyle(dayHighLineStyleInput))
+var Level dayLowLv = Level.new(showDayLowLineInput, showDayLowLabelInput, showDayLowLabelPriceInput, dayLowLabelOffsetInput, dayLowLabelTextInput, dayLowLabelTextColorInput, toTextAlign(dayLowLabelAlignInput), dayLowColorInput, dayLowLineWidthInput, toLineStyle(dayLowLineStyleInput))
+var Level prevWkHighLv = Level.new(showPrevWkHighLineInput, showPrevWkHighLabelInput, showPrevWkHighLabelPriceInput, prevWkHighLabelOffsetInput, prevWkHighLabelTextInput, prevWkHighLabelTextColorInput, toTextAlign(prevWkHighLabelAlignInput), prevWkHighColorInput, prevWkHighLineWidthInput, toLineStyle(prevWkHighLineStyleInput))
+var Level prevWkLowLv = Level.new(showPrevWkLowLineInput, showPrevWkLowLabelInput, showPrevWkLowLabelPriceInput, prevWkLowLabelOffsetInput, prevWkLowLabelTextInput, prevWkLowLabelTextColorInput, toTextAlign(prevWkLowLabelAlignInput), prevWkLowColorInput, prevWkLowLineWidthInput, toLineStyle(prevWkLowLineStyleInput))
+var Level wkHighLv = Level.new(showWkHighLineInput, showWkHighLabelInput, showWkHighLabelPriceInput, wkHighLabelOffsetInput, wkHighLabelTextInput, wkHighLabelTextColorInput, toTextAlign(wkHighLabelAlignInput), wkHighColorInput, wkHighLineWidthInput, toLineStyle(wkHighLineStyleInput))
+var Level wkLowLv = Level.new(showWkLowLineInput, showWkLowLabelInput, showWkLowLabelPriceInput, wkLowLabelOffsetInput, wkLowLabelTextInput, wkLowLabelTextColorInput, toTextAlign(wkLowLabelAlignInput), wkLowColorInput, wkLowLineWidthInput, toLineStyle(wkLowLineStyleInput))
+var Level rthOpenLv = Level.new(showRthOpenLineInput, showRthOpenLabelInput, showRthOpenLabelPriceInput, rthOpenLabelOffsetInput, rthOpenLabelTextInput, rthOpenLabelTextColorInput, toTextAlign(rthOpenLabelAlignInput), rthOpenColorInput, rthOpenLineWidthInput, toLineStyle(rthOpenLineStyleInput))
+var Level rthCloseLv = Level.new(showRthCloseLineInput, showRthCloseLabelInput, showRthCloseLabelPriceInput, rthCloseLabelOffsetInput, rthCloseLabelTextInput, rthCloseLabelTextColorInput, toTextAlign(rthCloseLabelAlignInput), rthCloseColorInput, rthCloseLineWidthInput, toLineStyle(rthCloseLineStyleInput))
+
+var float prevHigh = na
+var float prevLow = na
+var int prevHighBar = na
+var int prevLowBar = na
+var float prevDayHigh2 = na
+var float prevDayLow2 = na
+var int prevDayHigh2Bar = na
+var int prevDayLow2Bar = na
+var float prevOpen = na
+var float cdo = na
+var float pdcp = na
+var float prevClose = na
+var float dayHigh = na
+var float dayLow = na
+var int dayHighBar = na
+var int dayLowBar = na
+var float ahHigh = na
+var float ahLow = na
+var int ahHighBar = na
+var int ahLowBar = na
+var float prevWkHigh = na
+var float prevWkLow = na
+var int prevWkHighBar = na
+var int prevWkLowBar = na
+var float wkHigh = na
+var float wkLow = na
+var float rthOpen = na
+var float rthClose = na
+
+//---------------------
+//CDO 当日开盘价
+//---------------------
+// 当天第一根常规交易(market)K线的开盘价：期货 = 交易时段首根；美股 = 9:30 首根。
+// 不再用 request.security + lookahead_on，避免美股在盘前就"提前看到"9:30 开盘价。
+isFirstMarketBar = session.ismarket and (session.isfirstbar or not session.ismarket[1])
+if session.isfirstbar
+    cdo := na
+if isFirstMarketBar
+    cdo := open
+
+//---------------------
+//周线高低点（只统计 RTH）
+//---------------------
+isFirstBarOfWeek = timeframe.change('W')
+
+var float wkTrackHigh    = na
+var float wkTrackLow     = na
+var int   wkTrackHighBar = na
+var int   wkTrackLowBar  = na
+
+if isFirstBarOfWeek
+    prevWkHigh     := wkTrackHigh
+    prevWkLow      := wkTrackLow
+    prevWkHighBar  := wkTrackHighBar
+    prevWkLowBar   := wkTrackLowBar
+    wkTrackHigh    := na
+    wkTrackLow     := na
+    wkTrackHighBar := na
+    wkTrackLowBar  := na
+
+if isRth
+    if na(wkTrackHigh) or high > wkTrackHigh
+        wkTrackHigh    := high
+        wkTrackHighBar := bar_index
+    if na(wkTrackLow) or low < wkTrackLow
+        wkTrackLow    := low
+        wkTrackLowBar := bar_index
+
+// 先赋值、再更新线，线和标签才不会慢一根K线
+wkHigh := wkTrackHigh
+wkLow  := wkTrackLow
+
+//---------------------
+//前一日 / 前两天（只统计 RTH），在交易时段首根K线定格
+//---------------------
+if session.isfirstbar
+    prevHigh        := rthDone1High
+    prevLow         := rthDone1Low
+    prevHighBar     := rthDone1HighBar
+    prevLowBar      := rthDone1LowBar
+    prevOpen        := rthDone1Open
+    prevClose       := rthDone1Close
+    prevDayHigh2    := rthDone2High
+    prevDayLow2     := rthDone2Low
+    prevDayHigh2Bar := rthDone2HighBar
+    prevDayLow2Bar  := rthDone2LowBar
+    // PDCP = 前一日控制点（BB SYSTEM）：前一日最高价与最低价的中点
+    pdcp            := (rthDone1High + rthDone1Low) / 2
+
+//---------------------
+//日内高低点（只统计 RTH）
+//---------------------
+// 新交易时段开始时清空，9:30 起跟随当天 RTH 高低点，收盘后保持到下一个交易时段
+if session.isfirstbar or rthStartNow
+    dayHigh := na
+    dayLow  := na
+if isRth
+    dayHigh    := rthTrackHigh
+    dayLow     := rthTrackLow
+    dayHighBar := rthTrackHighBar
+    dayLowBar  := rthTrackLowBar
+
+//---------------------
+//本周 / 日内高低点：只在数值变化时移动线和标签
+//---------------------
+wkHighChanged  = changed(wkHigh)
+wkLowChanged   = changed(wkLow)
+dayHighChanged = changed(dayHigh)
+dayLowChanged  = changed(dayLow)
+
+if wkHighChanged
+    wkHighLv.moveTo(wkHigh, wkTrackHighBar)
+if wkLowChanged
+    wkLowLv.moveTo(wkLow, wkTrackLowBar)
+
+//---------------------
+//盘后高低点
+//---------------------
+ahStartNow = session.ispostmarket and not session.ispostmarket[1]
+if ahStartNow
+    ahHigh    := high
+    ahLow     := low
+    ahHighBar := bar_index
+    ahLowBar  := bar_index
+    ahHighLv.retire()
+    ahLowLv.retire()
+    if timeframe.isintraday
+        ahHighLv.draw(ahHigh, ahHighBar)
+        ahLowLv.draw(ahLow, ahLowBar)
+else if session.ispostmarket
+    if high > ahHigh
+        ahHigh    := high
+        ahHighBar := bar_index
+        ahHighLv.moveTo(ahHigh, ahHighBar)
+    if low < ahLow
+        ahLow    := low
+        ahLowBar := bar_index
+        ahLowLv.moveTo(ahLow, ahLowBar)
+
+//---------------------
+//前一日 / 前两天 / CDO / PDCP：每个交易时段首根K线重画
+//---------------------
+if session.isfirstbar
+    prevHighLv.retire()
+    prevLowLv.retire()
+    prevDayHigh2Lv.retire()
+    prevDayLow2Lv.retire()
+    prevOpenLv.retire()
+    cdoLv.retire()
+    pdcpLv.retire()
+    prevCloseLv.retire()
+    if timeframe.isintraday
+        prevHighLv.draw(prevHigh, prevHighBar)
+        prevLowLv.draw(prevLow, prevLowBar)
+        prevDayHigh2Lv.draw(prevDayHigh2, prevDayHigh2Bar)
+        prevDayLow2Lv.draw(prevDayLow2, prevDayLow2Bar)
+        prevOpenLv.draw(prevOpen, bar_index)
+        cdoLv.draw(cdo, bar_index)
+        pdcpLv.draw(pdcp, prevHighBar)
+        prevCloseLv.draw(prevClose, bar_index)
+
+// 美股的 CDO 要到 9:30 才知道：更新盘前创建的线和标签
+if isFirstMarketBar and not session.isfirstbar
+    cdoLv.moveTo(cdo, na)
+
+//---------------------
+//日内高低点 / 9:30开盘价 / 16:00收盘价（美股常规时段）
+//---------------------
+// 日内高低点：新交易时段开始时停掉旧线（9:30 再画新线）
+if session.isfirstbar or rthStartNow
+    dayHighLv.retire()
+    dayLowLv.retire()
+
+if rthStartNow
+    rthOpen := open
+    rthOpenLv.retire()
+    if timeframe.isintraday
+        rthOpenLv.draw(rthOpen, bar_index)
+        dayHighLv.draw(dayHigh, bar_index)
+        dayLowLv.draw(dayLow, bar_index)
+
+// RTH 进行中：日内高低点变化时移动
+if isRth and not rthStartNow
+    if dayHighChanged
+        dayHighLv.moveTo(dayHigh, dayHighBar)
+    if dayLowChanged
+        dayLowLv.moveTo(dayLow, dayLowBar)
+
+// 16:00 收盘价：当天 RTH 结束时定格（没开盘前盘后数据时在下一天 9:30 定格），在那之前显示上一个交易日的收盘价
+if rthDayCompleted
+    rthClose := rthDone1Close
+    rthCloseLv.retire()
+    if timeframe.isintraday
+        rthCloseLv.draw(rthClose, bar_index)
+
+//---------------------
+//上周 / 本周：每周首根K线重画
+//---------------------
+if isFirstBarOfWeek
+    prevWkHighLv.retire()
+    prevWkLowLv.retire()
+    wkHighLv.retire()
+    wkLowLv.retire()
+    prevWkHighLv.draw(prevWkHigh, prevWkHighBar)
+    prevWkLowLv.draw(prevWkLow, prevWkLowBar)
+    wkHighLv.draw(wkHigh, bar_index)
+    wkLowLv.draw(wkLow, bar_index)
+
+// 线都是向右无限延伸的，不需要每根K线更新 x2；标签只需在最后一根K线上跟随
+if barstate.islast
+    prevHighLv.placeLabel()
+    prevLowLv.placeLabel()
+    prevDayHigh2Lv.placeLabel()
+    prevDayLow2Lv.placeLabel()
+    prevOpenLv.placeLabel()
+    cdoLv.placeLabel()
+    pdcpLv.placeLabel()
+    prevCloseLv.placeLabel()
+    ahHighLv.placeLabel()
+    ahLowLv.placeLabel()
+    dayHighLv.placeLabel()
+    dayLowLv.placeLabel()
+    prevWkHighLv.placeLabel()
+    prevWkLowLv.placeLabel()
+    wkHighLv.placeLabel()
+    wkLowLv.placeLabel()
+    rthOpenLv.placeLabel()
+    rthCloseLv.placeLabel()
+
+//---------------------
+//ORB 开盘区间（跟随 RTH 时段输入，不再写死 9:30 / 16:00；关掉显示也照样计算，警报可用）
+//---------------------
+ORB_LINE_WIDTH = 2
+rthEndHour   = int(str.tonumber(str.substring(rthSessionInput, 5, 7)))
+rthEndMinute = int(str.tonumber(str.substring(rthSessionInput, 7, 9)))
+
+var int   orbStartTime   = na
+var int   orbEndTime     = na
+var int   orbCloseTime   = na
+var float openingHigh    = na
+var float openingLow     = na
+var bool  longTriggered  = false
+var bool  shortTriggered = false
+var array<line>  orbLineList  = array.new<line>()
+var array<label> orbLabelList = array.new<label>()
+
+if rthStartNow
+    orbStartTime   := time
+    orbEndTime     := time + orbDurationInput * 60 * 1000
+    orbCloseTime   := timestamp("America/New_York", year(time, "America/New_York"), month(time, "America/New_York"), dayofmonth(time, "America/New_York"), rthEndHour, rthEndMinute)
+    openingHigh    := na
+    openingLow     := na
+    longTriggered  := false
+    shortTriggered := false
+    // 选"显示所有天数"时保留历史开盘区间，其余选项只显示当天
+    if levelDisplay != LevelDisplay.allDays
+        while array.size(orbLineList) > 0
+            line.delete(array.pop(orbLineList))
+        while array.size(orbLabelList) > 0
+            label.delete(array.pop(orbLabelList))
+
+isInOpeningRange = not na(orbStartTime) and time >= orbStartTime and time < orbEndTime
+if isInOpeningRange
+    if na(openingHigh) or high > openingHigh
+        openingHigh := high
+    if na(openingLow) or low < openingLow
+        openingLow := low
+
+isOpeningRangeEnd = isInOpeningRange[1] and not isInOpeningRange
+
+if showOrbInput and isOpeningRangeEnd
+    if na(openingHigh) or na(openingLow)
+        pushLabel(orbLabelList, label.new(bar_index, high, "Missing Data for Opening Range", color = color.red, style = label.style_label_down, textcolor = color.white))
+    if not na(openingHigh)
+        pushLine(orbLineList, line.new(orbStartTime, openingHigh, orbCloseTime, openingHigh, xloc = xloc.bar_time, color = orbHighColorInput, width = ORB_LINE_WIDTH))
+        // 在线的最右端（RTH 收盘时间）显示 ORB 高点价格
+        if showLabelsInput
+            pushLabel(orbLabelList, label.new(x = orbCloseTime, y = openingHigh, xloc = xloc.bar_time, text = "ORB H (" + str.tostring(openingHigh, format.mintick) + ")", style = label.style_label_left, color = color.new(color.black, 100), textcolor = orbHighColorInput, size = ulgl.GetFontSize(labelSizeInput)))
+    if not na(openingLow)
+        pushLine(orbLineList, line.new(orbStartTime, openingLow, orbCloseTime, openingLow, xloc = xloc.bar_time, color = orbLowColorInput, width = ORB_LINE_WIDTH))
+        // 在线的最右端（RTH 收盘时间）显示 ORB 低点价格
+        if showLabelsInput
+            pushLabel(orbLabelList, label.new(x = orbCloseTime, y = openingLow, xloc = xloc.bar_time, text = "ORB L (" + str.tostring(openingLow, format.mintick) + ")", style = label.style_label_left, color = color.new(color.black, 100), textcolor = orbLowColorInput, size = ulgl.GetFontSize(labelSizeInput)))
+
+// === Breakout detection (chart timeframe, fires on bar close, gap-and-go aware) ===
+if not isInOpeningRange and time >= orbEndTime and not na(openingHigh) and not na(openingLow) and barstate.isconfirmed
+    if close > openingHigh and not longTriggered
+        longTriggered  := true
+        shortTriggered := false
+        if showOrbInput and showOrbBreakoutLabelsInput
+            pushLabel(orbLabelList, label.new(bar_index, openingHigh, "LONG", color = color.blue, textcolor = color.white, style = label.style_flag, size = size.small))
+    if close < openingLow and not shortTriggered
+        shortTriggered := true
+        longTriggered  := false
+        if showOrbInput and showOrbBreakoutLabelsInput
+            pushLabel(orbLabelList, label.new(bar_index, openingLow, "SHORT", color = color.yellow, textcolor = color.white, style = label.style_flag, size = size.small))
+
+//---------------------
+//提示：美股没开盘前盘后数据时，盘前 / 盘后价位不会显示
+//---------------------
+var bool hasExtendedHours = false
+if session.ispremarket or session.ispostmarket
+    hasExtendedHours := true
+isStockLike = syminfo.type == "stock" or syminfo.type == "fund" or syminfo.type == "dr"
+var table ethWarning = table.new(position.bottom_right, 1, 1)
+if barstate.islast and timeframe.isintraday and isStockLike and not hasExtendedHours
+    table.cell(ethWarning, 0, 0, "未开启盘前盘后数据 (ETH)：盘前 / 盘后价位不会显示", text_color = color.white, bgcolor = color.new(color.red, 20), text_size = size.small)
+
+//---------------------
+//价格轴显示
+//---------------------
+plot(timeframe.isintraday and showPrevHighOnAxisInput and isAxisVisibleTf ? prevHigh : na, color = prevHighColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showPrevLowOnAxisInput and isAxisVisibleTf ? prevLow : na, color = prevLowColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showPrevDayHigh2OnAxisInput and isAxisVisibleTf ? prevDayHigh2 : na, color = prevDayHigh2ColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showPrevDayLow2OnAxisInput and isAxisVisibleTf ? prevDayLow2 : na, color = prevDayLow2ColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showPrevOpenOnAxisInput and isAxisVisibleTf ? prevOpen : na, color = prevOpenColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showCdoOnAxisInput and isAxisVisibleTf ? cdo : na, color = cdoColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showPdcpOnAxisInput and isAxisVisibleTf ? pdcp : na, color = pdcpColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showPrevCloseOnAxisInput and isAxisVisibleTf ? prevClose : na, color = prevCloseColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showAhHighOnAxisInput and isAxisVisibleTf ? ahHigh : na, color = ahHighColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showAhLowOnAxisInput and isAxisVisibleTf ? ahLow : na, color = ahLowColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showDayHighOnAxisInput and isAxisVisibleTf ? dayHigh : na, color = dayHighColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showDayLowOnAxisInput and isAxisVisibleTf ? dayLow : na, color = dayLowColorInput, editable = false, display = display.price_scale)
+plot(showPrevWkHighOnAxisInput and isAxisVisibleTf ? prevWkHigh : na, '上周最高价', color = prevWkHighColorInput, editable = false, display = display.price_scale)
+plot(showPrevWkLowOnAxisInput and isAxisVisibleTf ? prevWkLow : na, '上周最低价', color = prevWkLowColorInput, editable = false, display = display.price_scale)
+plot(showWkHighOnAxisInput and isAxisVisibleTf ? wkHigh : na, '本周最高价', color = wkHighColorInput, editable = false, display = display.price_scale)
+plot(showWkLowOnAxisInput and isAxisVisibleTf ? wkLow : na, '本周最低价', color = wkLowColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showRthOpenOnAxisInput and isAxisVisibleTf ? rthOpen : na, '9:30开盘价', color = rthOpenColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showRthCloseOnAxisInput and isAxisVisibleTf ? rthClose : na, '16:00收盘价', color = rthCloseColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showOrbInput and isAxisVisibleTf ? openingHigh : na, 'ORB H', color = orbHighColorInput, editable = false, display = display.price_scale)
+plot(timeframe.isintraday and showOrbInput and isAxisVisibleTf ? openingLow : na, 'ORB L', color = orbLowColorInput, editable = false, display = display.price_scale)
+
+//---------------------
+//警报（价位跳变的那根K线不触发）
+//---------------------
+alertcondition(crossedUp(pmHigh), "价格突破盘前高点", "价格突破盘前高点")
+alertcondition(crossedDown(pmLow), "价格跌破盘前低点", "价格跌破盘前低点")
+alertcondition(crossedUp(prevHigh), "价格突破前日高点", "价格突破前日高点")
+alertcondition(crossedDown(prevLow), "价格跌破前日低点", "价格跌破前日低点")
+alertcondition(crossedUp(openingHigh), title = "价格突破ORB开盘区间高点", message = "价格突破ORB开盘区间")
+alertcondition(crossedDown(openingLow), title = "价格跌破ORB开盘区间低点", message = "价格跌破ORB开盘区间")
