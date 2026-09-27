@@ -297,7 +297,7 @@ timeframeText(string tf) =>
         => str.tostring(mult) + "分钟"
 
 // 按选定类型计算移动平均
-movingAverage(float src, int length, MaType maType) =>
+movingAverage(float src, simple int length, simple MaType maType) =>
     switch maType
         MaType.ema  => ta.ema(src, length)
         MaType.sma  => ta.sma(src, length)
@@ -315,7 +315,7 @@ isDataInvalid(array<float> ohlcData) =>
 
 // 在被请求的周期上计算一条云图的快慢均线，返回最近10根的值（共20个：0~9快线，10~19慢线）
 // 不显示的云图不计算均线，直接返回全 na（isShown 来自输入，整段历史中不会变化，所以条件计算是安全的）
-cloudSeries(bool isShown, int fastLen, int slowLen) =>
+cloudSeries(simple bool isShown, simple int fastLen, simple int slowLen) =>
     array<float> values = array.new<float>(CLOUD_SIZE, na)
     if isShown
         float fastMa = movingAverage(maSourceInput, fastLen, maTypeInput)
@@ -328,7 +328,7 @@ cloudSeries(bool isShown, int fastLen, int slowLen) =>
 // 在被请求的周期上一次算完一组所需的全部数据（布局见常量 GROUP_DATA_SIZE）：
 // 最近10根K线的开高低收（偏移量*4 + 0/1/2/3 = 开/高/低/收；偏移量0 = 实时K线）+ 5条云图的快慢均线
 // 均线在这里计算、整体作为 request.security 的表达式，确保均线是在高周期上计算的
-htfGroupValues(bool show1, int fast1, int slow1, bool show2, int fast2, int slow2, bool show3, int fast3, int slow3, bool show4, int fast4, int slow4, bool show5, int fast5, int slow5) =>
+htfGroupValues(simple bool show1, simple int fast1, simple int slow1, simple bool show2, simple int fast2, simple int slow2, simple bool show3, simple int fast3, simple int slow3, simple bool show4, simple int fast4, simple int slow4, simple bool show5, simple int fast5, simple int slow5) =>
     array<float> data = array.from(
          open,    high,    low,    close,
          open[1], high[1], low[1], close[1],
@@ -350,7 +350,7 @@ htfGroupValues(bool show1, int fast1, int slow1, bool show2, int fast2, int slow
 // 每组只发起 1 次跨周期请求（K线与 5 条云图合并在一起），三组最多 3 次
 // 数据沿用图表的交易时段设置：图表开了盘前盘后时，1H/4H 也会包含盘前盘后
 // enabled 为 false 时不发起请求，直接返回全 na 占位数组；showN 为 false 的云图不计算均线
-fetchHtfGroup(bool enabled, string tf, bool show1, int fast1, int slow1, bool show2, int fast2, int slow2, bool show3, int fast3, int slow3, bool show4, int fast4, int slow4, bool show5, int fast5, int slow5) =>
+fetchHtfGroup(bool enabled, string tf, simple bool show1, simple int fast1, simple int slow1, simple bool show2, simple int fast2, simple int slow2, simple bool show3, simple int fast3, simple int slow3, simple bool show4, simple int fast4, simple int slow4, simple bool show5, simple int fast5, simple int slow5) =>
     enabled ? request.security(syminfo.tickerid, tf, htfGroupValues(show1, fast1, slow1, show2, fast2, slow2, show3, fast3, slow3, show4, fast4, slow4, show5, fast5, slow5)) : array.new<float>(GROUP_DATA_SIZE, na)
 
 // 分组周期必须 ≥ 图表周期：小于图表周期时 request.security 只能取到每根图表K线里最后一根小周期K线，
