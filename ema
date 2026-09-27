@@ -139,6 +139,10 @@ showDayCloud3Input  = input.bool(true, "日线组 云3", group = GROUP_MTF, inli
 showHourCloud4Input = input.bool(true, "小时组 云4", group = GROUP_MTF, inline = "m4",  display = display.none)
 showHourCloud5Input = input.bool(true, "小时组 云5", group = GROUP_MTF, inline = "m5",  display = display.none)
 
+mtfTrendColorInput = input.bool(false, "MTF 云按多空变色", tooltip = "打开后，快线 ≥ 慢线时云填充为左侧的多头颜色，否则为右侧的空头颜色。均线本身保持原颜色，用于区分是哪一组云。", group = GROUP_MTF, inline = "mtfTrend", display = display.none)
+mtfBullColorInput  = input.color(#4caf50, "", group = GROUP_MTF, inline = "mtfTrend", display = display.none)
+mtfBearColorInput  = input.color(#f44336, "", group = GROUP_MTF, inline = "mtfTrend", display = display.none)
+
 // --- 标签开关 + 字体大小 + 颜色（同一行，子开关右边） ---
 showLabel1Input  = input.bool(true, "显示标签 - 云1", group = GROUP_MTF, inline = "lbl1", display = display.none)
 label1SizeInput  = input.string("特大", "", options = ["极小", "小", "正常", "大", "特大"], group = GROUP_MTF, inline = "lbl1", display = display.none)
@@ -204,11 +208,16 @@ showDayCloud3  = showMtfInput and showDayCloud3Input  and dayCloudValid
 showHourCloud4 = showMtfInput and showHourCloud4Input and hourCloudValid
 showHourCloud5 = showMtfInput and showHourCloud5Input and hourCloudValid
 
-dayCloud1Color  = color.new(color.blue, 85)
-dayCloud2Color  = color.new(color.teal, 85)
-dayCloud3Color  = color.new(color.purple, 85)
-hourCloud4Color = color.new(color.orange, 85)
-hourCloud5Color = color.new(color.fuchsia, 85)
+// 按多空变色时用多头/空头颜色，否则用该组云的固定颜色
+mtfCloudColor(fastValue, slowValue, baseColor) =>
+    trendColor = fastValue >= slowValue ? mtfBullColorInput : mtfBearColorInput
+    color.new(mtfTrendColorInput ? trendColor : baseColor, 85)
+
+dayCloud1Color  = mtfCloudColor(dayFast1,  daySlow1,  color.blue)
+dayCloud2Color  = mtfCloudColor(dayFast2,  daySlow2,  color.teal)
+dayCloud3Color  = mtfCloudColor(dayFast3,  daySlow3,  color.purple)
+hourCloud4Color = mtfCloudColor(hourFast4, hourSlow4, color.orange)
+hourCloud5Color = mtfCloudColor(hourFast5, hourSlow5, color.fuchsia)
 
 // editable=false：Style 标签页中不再显示每条线单独的颜色/粗细/线型设置
 dayCloud1FastPlot  = plot(showDayCloud1 ? dayFast1 : na, color = color.blue, offset = dayLeadInput, linewidth = 2, title = "Day MA 1 Short", editable = false, display = display.pane)
