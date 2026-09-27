@@ -12,6 +12,7 @@ MAX_TRACKED    = 500
 ORB_LINE_WIDTH = 2
 TRANSPARENT    = color.new(color.black, 100)
 
+GROUP_GENERAL  = "通用设置"
 GROUP_SESSION  = "交易时段"
 GROUP_PM       = "盘前"
 GROUP_PM_LABEL = "盘前 / ORB 标签"
@@ -102,8 +103,10 @@ pushLabel(array<label> list, label item) =>
         label.delete(array.shift(list))
 
 // ─────────────────────────────────────────────
-// 输入：交易时段 / 盘前 / ORB
+// 输入：通用设置 / 交易时段 / 盘前 / ORB
 // ─────────────────────────────────────────────
+levelDisplayInput = input.enum(LevelDisplay.currentDay, "显示模式", tooltip = "作用于所有价位线、盘前线和 ORB 开盘区间。", group = GROUP_GENERAL, display = display.none)
+
 pmSessionInput  = input.session("0400-0930", "盘前时段 (纽约时间)", group = GROUP_SESSION, display = display.none)
 rthSessionInput = input.session("0930-1600", "常规时段 (纽约时间)", group = GROUP_SESSION, display = display.none)
 
@@ -143,8 +146,6 @@ pmLabelVAlign   = toVerticalAlign(pmLabelVAlignInput)
 // ─────────────────────────────────────────────
 // 输入：各价位的线 / 价格轴 / 标签
 // ─────────────────────────────────────────────
-levelDisplayInput = input.enum(LevelDisplay.currentDay, "显示模式", group = GROUP_LEVEL, display = display.none)
-
 showPrevHighLineInput     = input.bool(true, "前一日最高价", group = GROUP_LEVEL, inline = "prevHigh", display = display.none)
 showPrevLowLineInput      = input.bool(true, "前一日最低价", group = GROUP_LEVEL, inline = "prevLow", display = display.none)
 showPrev2HighLineInput    = input.bool(false, "前第2日最高价", group = GROUP_LEVEL, inline = "prev2High", display = display.none)
