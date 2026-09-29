@@ -1,0 +1,86 @@
+//@version=6
+
+indicator('Aurora Trend Ribbon', 'Aurora', overlay = true)
+
+// ─────────────────────────────────────────────
+// 输入参数
+// ─────────────────────────────────────────────
+fib1Input = input.int(8,  'Fibonacci 1', minval = 2, maxval = 100)
+fib2Input = input.int(13, 'Fibonacci 2', minval = 2, maxval = 100)
+fib3Input = input.int(21, 'Fibonacci 3', minval = 2, maxval = 100)
+fib4Input = input.int(34, 'Fibonacci 4', minval = 2, maxval = 100)
+fib5Input = input.int(55, 'Fibonacci 5', minval = 2, maxval = 100)
+colorSmoothLenInput = input.int(6, 'Color Transition Smoothness', minval = 2, maxval = 20)
+
+// ─────────────────────────────────────────────
+// 5 条 EMA
+// ─────────────────────────────────────────────
+ema1 = ta.ema(close, fib1Input)
+ema2 = ta.ema(close, fib2Input)
+ema3 = ta.ema(close, fib3Input)
+ema4 = ta.ema(close, fib4Input)
+ema5 = ta.ema(close, fib5Input)
+
+// ─────────────────────────────────────────────
+// 带宽扩张 (百分比间距)
+// ─────────────────────────────────────────────
+ribbonSpread = na(ema1) or na(ema5) or close == 0 ? 0.0 : math.abs(ema1 - ema5) / close * 100
+
+// ─────────────────────────────────────────────
+// 多空完美排列
+// ─────────────────────────────────────────────
+allValid       = not (na(ema1) or na(ema2) or na(ema3) or na(ema4) or na(ema5))
+isBullishStack = allValid and ema1 > ema2 and ema2 > ema3 and ema3 > ema4 and ema4 > ema5
+isBearishStack = allValid and ema1 < ema2 and ema2 < ema3 and ema3 < ema4 and ema4 < ema5
+
+// 扩张得分: 间距 × 趋势一致性, 再平滑防止颜色闪烁
+trendAlignment    = isBullishStack or isBearishStack ? 1.0 : 0.0
+rawExpansionScore = ribbonSpread * (0.3 + 0.7 * trendAlignment)
+smoothedExpansion = ta.ema(rawExpansionScore, colorSmoothLenInput)
+
+// 归一化到 0-100 (200 根 K 线内最大值)
+maxExpansion        = ta.highest(nz(smoothedExpansion), 200)
+normalizedExpansion = na(maxExpansion) or maxExpansion == 0 ? 0.0 : math.min(nz(smoothedExpansion) / maxExpansion * 100, 100)
+
+// ─────────────────────────────────────────────
+// 配色
+// ─────────────────────────────────────────────
+// 多头: 洋红 → 紫 → 电光蓝
+BULL_1 = #ff1493
+BULL_2 = #9370db
+BULL_3 = #8a2be2
+BULL_4 = #7b68ee
+BULL_5 = #1e90ff
+// 空头: 深红 → 橙 → 金
+BEAR_1 = #dc143c
+BEAR_2 = #ff4500
+BEAR_3 = #ff8c00
+BEAR_4 = #ffd700
+BEAR_5 = #ffbf00
+// 震荡: 青 → 钢蓝 → 石板蓝
+MIX_1 = #00ffff
+MIX_2 = #008b8b
+MIX_3 = #87ceeb
+MIX_4 = #4682b4
+MIX_5 = #6a5acd
+
+lineColor(color bullCol, color bearCol, color mixCol) =>
+    isBullishStack ? bullCol : isBearishStack ? bearCol : mixCol
+
+// ─────────────────────────────────────────────
+// 绘图
+// ─────────────────────────────────────────────
+p1 = plot(ema1, 'EMA 8',  lineColor(BULL_1, BEAR_1, MIX_1), 2)
+p2 = plot(ema2, 'EMA 13', lineColor(BULL_2, BEAR_2, MIX_2), 1)
+p3 = plot(ema3, 'EMA 21', lineColor(BULL_3, BEAR_3, MIX_3), 1)
+p4 = plot(ema4, 'EMA 34', lineColor(BULL_4, BEAR_4, MIX_4), 1)
+p5 = plot(ema5, 'EMA 55', lineColor(BULL_5, BEAR_5, MIX_5), 1)
+
+// 极光填充 (透明度 = 100 - alpha × 100)
+fill(p1, p2, color.rgb(180, 100, 255, 72), 'Band 1-2')
+fill(p2, p3, color.rgb(100, 140, 255, 78), 'Band 2-3')
+fill(p3, p4, color.rgb(0,   180, 220, 82), 'Band 3-4')
+fill(p4, p5, color.rgb(0,   220, 180, 87), 'Band 4-5')
+
+// 扩张强度 (仅数据窗口显示, 不画在图上)
+plot(normalizedExpansion, 'Expansion %', display = display.data_window)
