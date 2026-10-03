@@ -1,0 +1,686 @@
+//@version=6
+// ==============================================================================================
+// Options Ladder Pro [DAFE]  —  Pine Script v6 port
+// ----------------------------------------------------------------------------------------------
+// Porting notes (vs. the original JS indicator):
+//  * Pine has no options-chain API, so "Live Options" is replaced by the Advanced Synthetic OI model.
+//    Auto  : stocks / ETFs / ADRs -> Advanced Synthetic ; futures / index / crypto / forex -> SLF (volume profile)
+//  * Chart.js embeds -> (a) OI profile drawn on the chart as boxes right of price, (b) Mass-Split zone table.
+//  * Gradient bars inside table cells -> unicode block bars.
+//  * FFT/spectral STRUCT readout, Fresh-Flow glow (needs OI-change data) and the 3-D terrain are not ported.
+//  * Levels (POC / VAH / VAL) are computed on the last bar and applied to history, exactly like the original,
+//    so VA/POC signal labels are re-drawn on every update (they are "hindsight" markers, as in the original).
+//    Peak / Valley markers are real per-bar signals (no repaint after close).
+// ==============================================================================================
+indicator("Options Ladder Pro [DAFE]", shorthand_title = "◇ OLP", overlay = true, max_bars_back = 1000, max_lines_count = 100, max_labels_count = 500, max_boxes_count = 500)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+srcMode    = input.string("Auto", "Data Source", options = ["Auto", "Advanced Synthetic", "SLF"], tooltip = "Auto: equities -> Advanced Synthetic (no options chain in Pine), futures/index/crypto/forex -> SLF volume profile.")
+synBars    = input.int(120, "Synthetic Range (bars)", minval = 20, maxval = 500)
+slfBars    = input.int(300, "SLF Profile Lookback (bars)", minval = 20, maxval = 500)
+numExp     = input.int(3, "Expirations (synthetic slices)", minval = 1, maxval = 5)
+rowsIn     = input.int(21, "Ladder Rows", minval = 9, maxval = 40)
+sensMode   = input.string("Balanced", "Signal Sensitivity", options = ["Loose", "Balanced", "Strict"])
+intrabarIn = input.string("On", "Intra-bar Signals", options = ["Off", "On"], tooltip = "On: signal on the forming bar is shown orange (LIVE) and confirms or vanishes at close.")
+embedMode  = input.string("Both", "Embed Visuals", options = ["Off", "Profile", "Split", "Both"], tooltip = "Profile = OI profile boxes on the chart. Split = Mass-Split zone table. Both = both.")
+profW      = input.int(25, "Profile Width (bars)", minval = 5, maxval = 80)
+profOff    = input.int(8, "Profile Offset (bars)", minval = 2, maxval = 60)
+sigBars    = input.int(300, "Signal History (bars)", minval = 20, maxval = 500)
+scanMode   = input.string("Off", "Highlight Scan", options = ["Off", "Fast", "Slow"])
+textSize   = input.string("Large", "Dashboard Text Size", options = ["Small", "Medium", "Large"])
+theme      = input.string("Neon Night", "Theme", options = ["Neon Night", "Cyber Punk", "Emerald Abyss", "Gold Sovereign"])
+showTable  = input.bool(true, "Show Dashboard")
+tblPos     = input.string("Top Right", "Dashboard Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right", "Middle Left"])
+showPV     = input.bool(true, "Show Peak / Valley Signals")
+showVAsig  = input.bool(true, "Show VA / POC Signals")
+
+// ============================================================================
+// THEME
+// ============================================================================
+color cBull = theme == "Neon Night" ? #00C853 : theme == "Cyber Punk" ? #00FF00 : theme == "Emerald Abyss" ? #00FF99 : #FFD700
+color cBear = theme == "Neon Night" ? #D32F2F : theme == "Cyber Punk" ? #FF007F : theme == "Emerald Abyss" ? #FF4500 : #E65100
+color cA1   = theme == "Neon Night" ? #4DA3FF : theme == "Cyber Punk" ? #00FFFF : theme == "Emerald Abyss" ? #3CB371 : #FFB300
+color cWarn = theme == "Neon Night" ? #FFA500 : theme == "Cyber Punk" ? #FFFF00 : theme == "Emerald Abyss" ? #FFD700 : #FF6D00
+color cGold = theme == "Cyber Punk" ? #FFFF00 : #FFD700
+color cTxt  = theme == "Neon Night" ? #E0E0FF : theme == "Cyber Punk" ? #FFE5FF : theme == "Emerald Abyss" ? #E0FFE0 : #FFF8E1
+color cDim  = theme == "Neon Night" ? #8888AA : theme == "Cyber Punk" ? #9A7FB0 : theme == "Emerald Abyss" ? #5D8A6E : #A08B4A
+color cBg   = theme == "Neon Night" ? #0A0B1F : theme == "Cyber Punk" ? #0F051D : theme == "Emerald Abyss" ? #020A05 : #0A0700
+color cMid  = #FF9A3C
+color putHot  = theme == "Cyber Punk" ? #FF0055 : theme == "Gold Sovereign" ? #FF3D00 : #FF1744
+color callHot = theme == "Cyber Punk" ? #39FF14 : theme == "Gold Sovereign" ? #FFF275 : #00FFAA
+
+string tSize = textSize == "Small" ? size.tiny : textSize == "Medium" ? size.small : size.normal
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+clamp(float v, float lo, float hi) => math.max(lo, math.min(hi, v))
+clamp01(float v) => clamp(v, 0.0, 1.0)
+roundToStep(float v, float step) => math.round(v / step) * step
+
+niceNum(float x) =>
+    float xv = x > 0 ? x : 1.0
+    float e = math.floor(math.log10(xv))
+    float f = xv / math.pow(10.0, e)
+    float nf = f <= 1.25 ? 1.0 : f <= 2.25 ? 2.0 : f <= 3.75 ? 2.5 : f <= 7.5 ? 5.0 : 10.0
+    nf * math.pow(10.0, e)
+
+inferStep(float spot, float rangeW) =>
+    float raw = rangeW > 0 ? rangeW / 20.0 : spot * 0.0002
+    float st = niceNum(math.max(raw, syminfo.mintick))
+    if math.abs(spot) >= 1000 and st < 1
+        st := 1.0
+    if math.abs(spot) >= 1000 and st == 2.5
+        st := 5.0
+    st
+
+gaussian(float x, float mu, float sigma) =>
+    float s = math.max(1e-8, sigma)
+    float z = (x - mu) / s
+    math.exp(-0.5 * z * z)
+
+normCdf(float x) =>
+    float t = 1.0 / (1.0 + 0.2316419 * math.abs(x))
+    float d = 0.3989423 * math.exp(-x * x / 2.0)
+    float p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))))
+    x > 0 ? 1.0 - p : p
+
+fmtPrice(float v) => na(v) ? "—" : str.tostring(v, format.mintick)
+
+fmtOI(float v) =>
+    v >= 1000000.0 ? str.tostring(v / 1000000.0, "0.00") + "M" : v >= 1000.0 ? str.tostring(v / 1000.0, "0.0") + "K" : str.tostring(v, "0")
+
+barL(float norm, int w) =>
+    int f = int(math.round(clamp01(norm) * w))
+    str.repeat("░", w - f) + str.repeat("█", f)
+
+barR(float norm, int w) =>
+    int f = int(math.round(clamp01(norm) * w))
+    str.repeat("█", f) + str.repeat("░", w - f)
+
+winRate(array<bool> a) =>
+    int sz = array.size(a)
+    float r = 0.5
+    if sz > 0
+        int s = 0
+        for q = 0 to sz - 1
+            if array.get(a, q)
+                s += 1
+        r := s / sz
+    r
+
+addAnchor(array<float> ap, array<float> aw, array<float> asg, float p, float w, float s, float lo, float hi) =>
+    if not na(p) and p >= lo and p <= hi
+        array.push(ap, p)
+        array.push(aw, w)
+        array.push(asg, math.max(s, 1e-10))
+    0
+
+classify(float level, bool isPoc, float poc, float vah, float val) =>
+    int r = 2
+    if not isPoc
+        if level < val
+            r := 4
+        else if level > vah
+            r := 0
+        else if level < poc
+            r := 3
+        else if level > poc
+            r := 1
+    r
+
+// ============================================================================
+// PER-BAR SERIES
+// ============================================================================
+float atr14  = ta.atr(14)
+float ema21  = ta.ema(close, 21)
+float ema55  = ta.ema(close, 55)
+float ema200 = ta.ema(close, 200)
+float volAvg = ta.sma(volume, 20)
+float relVol = volAvg > 0 ? volume / volAvg : 1.0
+
+var float tpCum = 0.0
+var float volCum = 0.0
+tpCum += hlc3 * nz(volume)
+volCum += nz(volume)
+float vwapC = volCum > 0 ? tpCum / volCum : close
+
+float downMv = math.max(nz(close[1], close) - close, 0.0)
+float upMv   = math.max(close - nz(close[1], close), 0.0)
+float synPCR = clamp(nz(ta.sma(downMv, 14), 1.0) / math.max(nz(ta.sma(upMv, 14), 1.0), 1e-10), 0.3, 3.0)
+
+float hlcc4 = (high + low + close + close) / 4.0
+float hlccW = ta.wma(hlcc4, 3)
+float velocity = nz(hlccW - hlccW[15])
+float acceleration = velocity - nz(velocity[1])
+float upBar = hlccW > nz(hlccW[1]) ? 1.0 : 0.0
+float pUpS = nz(ta.sma(upBar, 30), 0.5)
+float entropy = (pUpS > 0 and pUpS < 1) ? (-pUpS * math.log(pUpS) - (1 - pUpS) * math.log(1 - pUpS)) / math.log(2) : 0.0
+float entPct = nz(ta.percentrank(entropy, 200), 50.0)
+
+bool trendUp = close > ema21
+bool volSpike = volume > 1.5 * (volAvg > 0 ? volAvg : 1.0)
+bool pivotHigh = high[1] > high[2] and high[1] > high
+bool pivotLow  = low[1] < low[2] and low[1] < low
+float hh30 = ta.highest(high, 30)
+float ll30 = ta.lowest(low, 30)
+float hhPrior = hh30[1]
+float llPrior = ll30[1]
+
+// Wick Pressure Kernel
+float wSup = 0.0
+float wDem = 0.0
+for j = 0 to 29
+    float aW = nz(atr14[j], 1e-8)
+    float wAge = math.exp(-j / 60.0)
+    float dUp = math.exp(-math.abs(close - high[j]) / (1.5 * aW))
+    float dDn = math.exp(-math.abs(close - low[j]) / (1.5 * aW))
+    float bTop = math.max(open[j], close[j])
+    float bBot = math.min(open[j], close[j])
+    float rngJ = math.max(1e-8, high[j] - low[j])
+    float uWick = math.max(0.0, high[j] - bTop) / rngJ
+    float lWick = math.max(0.0, bBot - low[j]) / rngJ
+    wSup += wAge * dUp * uWick
+    wDem += wAge * dDn * lWick
+float WPK = wDem - wSup
+float wpkMean = ta.sma(WPK, 30)
+float wpkDev = ta.stdev(WPK, 30)
+float WPKz = wpkDev > 0 ? (WPK - nz(wpkMean)) / wpkDev : 0.0
+
+// ============================================================================
+// SENSITIVITY
+// ============================================================================
+int minDist = sensMode == "Loose" ? 5 : sensMode == "Balanced" ? 10 : 15
+float pcrHi = sensMode == "Loose" ? 1.25 : sensMode == "Balanced" ? 1.15 : 1.05
+float pcrLo = sensMode == "Loose" ? 0.80 : sensMode == "Balanced" ? 0.85 : 0.95
+bool intrabarOn = intrabarIn == "On"
+
+// ============================================================================
+// PEAK / VALLEY ENGINE (per bar, adaptive win-rate feedback)
+// ============================================================================
+var float lastPeakPrice = na
+var float lastPeakVel = na
+var float lastValleyPrice = na
+var float lastValleyVel = na
+var int lastPeakSigBar = -999
+var int lastValleySigBar = -999
+var string lastSigType = "None"
+var float peakAdj = 0.0
+var float valleyAdj = 0.0
+var array<float> pkPx = array.new<float>()
+var array<int> pkAt = array.new<int>()
+var array<bool> pkRes = array.new<bool>()
+var array<float> vyPx = array.new<float>()
+var array<int> vyAt = array.new<int>()
+var array<bool> vyRes = array.new<bool>()
+
+bool peakSig = false
+bool valleySig = false
+bool tent = intrabarOn and barstate.islast and not barstate.isconfirmed
+
+if bar_index >= 40
+    while array.size(pkAt) > 0 and array.get(pkAt, 0) <= bar_index
+        float pPx = array.shift(pkPx)
+        array.shift(pkAt)
+        array.push(pkRes, close < pPx)
+        if array.size(pkRes) > 20
+            array.shift(pkRes)
+    while array.size(vyAt) > 0 and array.get(vyAt, 0) <= bar_index
+        float vPx = array.shift(vyPx)
+        array.shift(vyAt)
+        array.push(vyRes, close > vPx)
+        if array.size(vyRes) > 20
+            array.shift(vyRes)
+    peakAdj := clamp((0.5 - winRate(pkRes)) * 30.0, -10.0, 10.0)
+    valleyAdj := clamp((0.5 - winRate(vyRes)) * 30.0, -10.0, 10.0)
+
+    float atrH = nz(atr14, 1e-8)
+    float buf = 0.25 * atrH
+    float trendStrNorm = math.abs(velocity) / atrH
+    float accNorm = acceleration / atrH
+    float barRangeNorm = (high - low) / atrH
+    float volRatio = nz(relVol, 1.0)
+    bool entropyOk = entPct <= 40
+    float boost = 1.0 + (entropyOk ? 0.15 : 0.0)
+    float variation = clamp((barRangeNorm - 1.0) * 3.0, -3.0, 3.0)
+    float orderliness = clamp(24.0 * (1.0 - entPct / 100.0), 0.0, 24.0)
+    float trendScore = clamp((trendStrNorm / 2.5) * 20.0, 0.0, 20.0)
+    float volScore = volSpike ? clamp(6.0 + (volRatio - 1.0) * 4.0, 6.0, 12.0) : 0.0
+
+    // ---- peak
+    bool bearDiv = pivotHigh and not na(lastPeakPrice) and high > lastPeakPrice and velocity < lastPeakVel
+    bool pc1 = pivotHigh and close < low[1] - buf and trendUp
+    bool pc2 = not na(llPrior) and close < llPrior and volSpike
+    bool pcP = acceleration < 0 and high >= hh30 - buf
+    if (pc1 or pc2 or pcP) and (bar_index - lastPeakSigBar >= minDist)
+        float divS = bearDiv ? clamp(16.0 + math.abs(accNorm) * 8.0, 16.0, 22.0) : 0.0
+        float wpkS = clamp((normCdf(math.max(0.0, -WPKz)) - 0.5) * 2.0 * 12.0, 0.0, 15.0)
+        float rawP = (34.0 + orderliness + trendScore + divS + volScore + wpkS + peakAdj + variation) * boost
+        int probP = int(clamp(math.round(rawP), 0, 99))
+        if probP >= 55
+            peakSig := true
+            lastPeakSigBar := bar_index
+            lastSigType := "Peak"
+            if not tent
+                array.push(pkPx, high)
+                array.push(pkAt, bar_index + 12)
+    if pivotHigh
+        lastPeakPrice := high
+        lastPeakVel := velocity
+
+    // ---- valley
+    bool bullDiv = pivotLow and not na(lastValleyPrice) and low < lastValleyPrice and velocity > lastValleyVel
+    bool vc1 = pivotLow and close > high[1] + buf and not trendUp
+    bool vc2 = not na(hhPrior) and close > hhPrior and volSpike
+    bool vcP = acceleration > 0 and low <= ll30 + buf
+    if (vc1 or vc2 or vcP) and (bar_index - lastValleySigBar >= minDist)
+        float divS2 = bullDiv ? clamp(16.0 + math.abs(accNorm) * 8.0, 16.0, 22.0) : 0.0
+        float wpkS2 = clamp((normCdf(math.max(0.0, WPKz)) - 0.5) * 2.0 * 12.0, 0.0, 15.0)
+        float rawV = (34.0 + orderliness + trendScore + divS2 + volScore + wpkS2 + valleyAdj + variation) * boost
+        int probV = int(clamp(math.round(rawV), 0, 99))
+        if probV >= 55
+            valleySig := true
+            lastValleySigBar := bar_index
+            lastSigType := "Valley"
+            if not tent
+                array.push(vyPx, low)
+                array.push(vyAt, bar_index + 12)
+    if pivotLow
+        lastValleyPrice := low
+        lastValleyVel := velocity
+
+bool peakConf = peakSig and not tent
+bool valleyConf = valleySig and not tent
+plotshape(showPV and peakConf, "Peak Signal", shape.triangledown, location.abovebar, cBear, size = size.tiny)
+plotshape(showPV and valleyConf, "Valley Signal", shape.triangleup, location.belowbar, cBull, size = size.tiny)
+plotshape(showPV and peakSig and tent, "Peak Signal (live)", shape.triangledown, location.abovebar, cWarn, size = size.tiny)
+plotshape(showPV and valleySig and tent, "Valley Signal (live)", shape.triangleup, location.belowbar, cWarn, size = size.tiny)
+
+// ============================================================================
+// MODEL + BOARD + DRAWINGS (last bar only)
+// ============================================================================
+var float pocLvl = na
+var float vahLvl = na
+var float valLvl = na
+var string sigWhyLast = ""
+
+var table tbl = table.new(tblPos == "Top Right" ? position.top_right : tblPos == "Top Left" ? position.top_left : tblPos == "Bottom Right" ? position.bottom_right : tblPos == "Bottom Left" ? position.bottom_left : tblPos == "Middle Right" ? position.middle_right : position.middle_left, 3, 5 + rowsIn + 11, border_width = 0, frame_color = color.new(cA1, 68), frame_width = 1)
+
+var array<box> bxs = array.new<box>()
+var array<line> lns = array.new<line>()
+var array<label> lbs = array.new<label>()
+var array<label> sigLabs = array.new<label>()
+
+tc(int c, int r, string txt, color fg, color bg, string al = text.align_center, string sz = "") =>
+    table.cell(tbl, c, r, txt, text_color = fg, bgcolor = bg, text_halign = al, text_size = sz == "" ? tSize : sz, text_font_family = font.family_monospace)
+
+int baseR = 5 + rowsIn
+if barstate.isfirst
+    table.merge_cells(tbl, 0, 0, 2, 0)
+    table.merge_cells(tbl, 0, 4, 2, 4)
+    table.merge_cells(tbl, 0, baseR + 2, 2, baseR + 2)
+    table.merge_cells(tbl, 0, baseR + 3, 2, baseR + 3)
+    table.merge_cells(tbl, 0, baseR + 4, 2, baseR + 4)
+    table.merge_cells(tbl, 0, baseR + 10, 2, baseR + 10)
+
+if barstate.islast
+    float spot = close
+    float atrV = math.max(nz(atr14, 1.0), syminfo.mintick)
+    bool isEq = syminfo.type == "stock" or syminfo.type == "fund" or syminfo.type == "dr"
+    string srcEff = srcMode == "Auto" ? (isEq ? "Advanced Synthetic" : "SLF") : srcMode
+    string srcTxt = srcEff == "SLF" ? "SLF" : "ADVANCED SYNTHETIC"
+    string noteTxt = srcMode == "Auto" ? (isEq ? "Auto: no options chain in Pine → Advanced Synthetic" : "Auto: " + syminfo.type + " → SLF selected") : "Source forced: " + srcEff
+    string leftName = srcEff == "SLF" ? "SELLS" : "PUTS"
+    string rightName = srcEff == "SLF" ? "BUYS" : "CALLS"
+
+    array<float> lv = array.new<float>()
+    array<float> lf = array.new<float>()
+    array<float> rg = array.new<float>()
+    float rowStep = na
+
+    if srcEff == "SLF"
+        int lb = math.min(slfBars, bar_index + 1)
+        float pHi = high
+        float pLo = low
+        for k = 0 to lb - 1
+            pHi := math.max(pHi, high[k])
+            pLo := math.min(pLo, low[k])
+        float st0 = inferStep(spot, pHi - pLo)
+        pLo := math.floor(pLo / st0) * st0
+        pHi := math.ceil(pHi / st0) * st0
+        if pHi <= pLo
+            pHi := pLo + st0 * 8
+        int rc = rowsIn
+        float rowH = (pHi - pLo) / rc
+        rowStep := rowH
+        for r = 0 to rc - 1
+            array.push(lv, pLo + (r + 0.5) * rowH)
+            array.push(lf, 0.0)
+            array.push(rg, 0.0)
+        for k = 0 to lb - 1
+            int loRow = int(clamp(math.floor((low[k] - pLo) / rowH), 0, rc - 1))
+            int hiRow = int(clamp(math.floor((high[k] - pLo) / rowH), 0, rc - 1))
+            int span = math.max(1, hiRow - loRow + 1)
+            float vv = nz(volume[k]) / span
+            float barSpan = high[k] - low[k]
+            float buyFrac = barSpan > 1e-10 ? clamp01((close[k] - low[k]) / barSpan) : 0.5
+            for r = loRow to hiRow
+                array.set(rg, r, array.get(rg, r) + vv * buyFrac)
+                array.set(lf, r, array.get(lf, r) + vv * (1.0 - buyFrac))
+    else
+        int nExp = math.max(3, math.min(numExp, 8))
+        float tBias = ema21 >= ema55 ? 1.0 : -1.0
+        float phaseBias = 0.18
+        float pcrBias = clamp((synPCR - 1.0) / 1.4, -0.65, 0.65)
+        float volBias = clamp01(nz(relVol, 1.0) / 2.5)
+        float memBias = 0.92
+        float aggr = 1.45
+        int wb = math.min(synBars, bar_index + 1)
+        float hiL = high
+        float loL = low
+        for k = 0 to wb - 1
+            hiL := math.max(hiL, high[k])
+            loL := math.min(loL, low[k])
+        float pad = math.max(atrV * 0.75, (hiL - loL) * 0.08)
+        float strikeRange = math.max(((hiL + pad) - (loL - pad)) / 2.0, atrV * 3.0)
+        float stp = inferStep(spot, strikeRange * 2.0)
+        float kLo = roundToStep(spot - strikeRange, stp)
+        float kHi = roundToStep(spot + strikeRange, stp)
+        int gN = int(math.min(math.floor((kHi - kLo) / stp) + 1, 400))
+        float roundStep = niceNum(math.max(stp * 5.0, spot * 0.002))
+        float roundBase = roundToStep(spot, roundStep)
+        rowStep := stp
+        for j = 0 to gN - 1
+            array.push(lv, kLo + j * stp)
+            array.push(lf, 0.0)
+            array.push(rg, 0.0)
+        for e = 0 to nExp - 1
+            float widen = 1.0 + e * 0.32
+            float oiScale = math.max(1.0 - e * 0.09, 0.35)
+            float sigB = math.max(atrV * 1.8, stp * 2.5) * math.max(widen, 0.6)
+            float lo2 = kLo - stp
+            float hi2 = kHi + stp
+            array<float> ap = array.new<float>()
+            array<float> aw = array.new<float>()
+            array<float> asg = array.new<float>()
+            addAnchor(ap, aw, asg, spot, 1.45 * aggr, sigB * 0.90 * memBias, lo2, hi2)
+            addAnchor(ap, aw, asg, vwapC, 1.20 * aggr, sigB * 1.10, lo2, hi2)
+            addAnchor(ap, aw, asg, ema21, 1.00 * aggr, sigB * 1.18, lo2, hi2)
+            addAnchor(ap, aw, asg, ema55, 0.92 * aggr, sigB * 1.32, lo2, hi2)
+            addAnchor(ap, aw, asg, ema200, 0.72 * aggr, sigB * 1.45, lo2, hi2)
+            addAnchor(ap, aw, asg, hiL, 0.75 * aggr, sigB * 1.20, lo2, hi2)
+            addAnchor(ap, aw, asg, loL, 0.75 * aggr, sigB * 1.20, lo2, hi2)
+            addAnchor(ap, aw, asg, open, 0.78 * aggr, sigB * 1.05, lo2, hi2)
+            addAnchor(ap, aw, asg, spot + atrV * 2, 0.60 * aggr, sigB * 1.05, lo2, hi2)
+            addAnchor(ap, aw, asg, spot - atrV * 2, 0.60 * aggr, sigB * 1.05, lo2, hi2)
+            addAnchor(ap, aw, asg, roundBase, 1.20 * aggr, sigB * 0.95, lo2, hi2)
+            addAnchor(ap, aw, asg, roundBase + roundStep, 0.68 * aggr, sigB * 0.95, lo2, hi2)
+            addAnchor(ap, aw, asg, roundBase - roundStep, 0.68 * aggr, sigB * 0.95, lo2, hi2)
+            int aN = array.size(ap)
+            for j = 0 to gN - 1
+                float K = array.get(lv, j)
+                float base = 0.0
+                for a = 0 to aN - 1
+                    base += array.get(aw, a) * gaussian(K, array.get(ap, a), array.get(asg, a))
+                float roundMag = gaussian(K, roundToStep(K, roundStep), stp * 1.20)
+                float centerMag = gaussian(K, spot + tBias * atrV * 0.10, sigB * 0.95)
+                float sessPulse = gaussian(K, hiL, sigB * 1.20) + gaussian(K, loL, sigB * 1.20)
+                float wave = 1.0 + 0.05 * math.sin((K - spot) / math.max(stp, 1.0) * 1.6 + tBias * 0.75) + 0.03 * math.cos((K - spot) / math.max(stp, 1.0) * 0.9)
+                float seed = base * 0.66 + centerMag * 0.18 + roundMag * 0.10 + sessPulse * 0.06
+                seed := math.pow(math.max(seed, 1e-10), 0.88) * wave * aggr * (1.0 + volBias * 0.28) * oiScale
+                float above = K >= spot ? 1.0 : 0.0
+                float callTilt = clamp(0.48 + 0.20 * above + 0.10 * tBias + 0.08 * phaseBias - 0.10 * pcrBias + 0.05 * volBias, 0.12, 0.92)
+                float putTilt = clamp(0.52 + 0.20 * (1.0 - above) - 0.10 * tBias - 0.08 * phaseBias + 0.10 * pcrBias + 0.04 * (1.0 - volBias), 0.12, 0.92)
+                array.set(rg, j, array.get(rg, j) + seed * 10000.0 * callTilt)
+                array.set(lf, j, array.get(lf, j) + seed * 10000.0 * putTilt)
+
+    // ---- structure: POC / value area / current strike
+    int cnt = array.size(lv)
+    array<float> tot = array.new<float>()
+    float totAll = 0.0
+    for j = 0 to cnt - 1
+        float tj = array.get(lf, j) + array.get(rg, j)
+        array.push(tot, tj)
+        totAll += tj
+    int pocI = 0
+    float pocMax = -1.0
+    int curI = 0
+    float curD = 1e10
+    for j = 0 to cnt - 1
+        if array.get(tot, j) > pocMax
+            pocMax := array.get(tot, j)
+            pocI := j
+        float dj = math.abs(array.get(lv, j) - spot)
+        if dj < curD
+            curD := dj
+            curI := j
+    int vaLo = pocI
+    int vaHi = pocI
+    float vaAcc = array.get(tot, pocI)
+    float vaTarget = totAll * 0.70
+    while vaAcc < vaTarget and (vaLo > 0 or vaHi < cnt - 1)
+        float loO = vaLo > 0 ? array.get(tot, vaLo - 1) : -1.0
+        float hiO = vaHi < cnt - 1 ? array.get(tot, vaHi + 1) : -1.0
+        if hiO >= loO
+            vaHi += 1
+            vaAcc += math.max(hiO, 0.0)
+        else
+            vaLo -= 1
+            vaAcc += math.max(loO, 0.0)
+    pocLvl := array.get(lv, pocI)
+    vahLvl := array.get(lv, vaHi)
+    valLvl := array.get(lv, vaLo)
+
+    // ---- display window around price
+    int dispN = math.min(cnt, rowsIn)
+    int i0 = int(clamp(curI - math.floor(dispN / 2.0), 0, cnt - dispN))
+    int i1 = i0 + dispN - 1
+
+    float leftTot = 0.0
+    float rightTot = 0.0
+    float maxTot = 1e-10
+    for j = i0 to i1
+        leftTot += array.get(lf, j)
+        rightTot += array.get(rg, j)
+        maxTot := math.max(maxTot, array.get(tot, j))
+    float pcrVal = rightTot > 0 ? leftTot / rightTot : 99.0
+    float biasVal = (rightTot + leftTot) > 0 ? (rightTot - leftTot) / (rightTot + leftTot) : 0.0
+    float leftRef = math.max(array.percentile_linear_interpolation(array.slice(lf, i0, i1 + 1), 80), 1e-10)
+    float rightRef = math.max(array.percentile_linear_interpolation(array.slice(rg, i0, i1 + 1), 80), 1e-10)
+
+    // centre of gravity + normalised entropy of OI mass
+    float wsum = 0.0
+    float wlev = 0.0
+    float hAcc = 0.0
+    for j = 0 to cnt - 1
+        wsum += array.get(tot, j)
+        wlev += array.get(lv, j) * array.get(tot, j)
+    for j = 0 to cnt - 1
+        float pj = wsum > 0 ? array.get(tot, j) / wsum : 0.0
+        if pj > 1e-10
+            hAcc -= pj * math.log(pj)
+    float cog = wsum > 0 ? wlev / wsum : spot
+    float hNorm = cnt > 1 ? hAcc / math.log(cnt) : 1.0
+
+    // ---- chart drawings
+    for b in bxs
+        box.delete(b)
+    array.clear(bxs)
+    for l in lns
+        line.delete(l)
+    array.clear(lns)
+    for lb2 in lbs
+        label.delete(lb2)
+    array.clear(lbs)
+
+    int xL = bar_index - math.min(bar_index, math.max(synBars, 20)) + 1
+    int xR = bar_index + profOff - 1
+    array.push(lns, line.new(xL, pocLvl, xR, pocLvl, color = cGold, width = 2))
+    array.push(lns, line.new(xL, vahLvl, xR, vahLvl, color = color.new(cBull, 45), width = 1))
+    array.push(lns, line.new(xL, valLvl, xR, valLvl, color = color.new(cBear, 45), width = 1))
+    array.push(lbs, label.new(xR, pocLvl, "POC " + fmtPrice(pocLvl), style = label.style_label_left, color = color.new(cBg, 100), textcolor = cGold, size = size.small))
+    array.push(lbs, label.new(xR, vahLvl, "VAH " + fmtPrice(vahLvl), style = label.style_label_left, color = color.new(cBg, 100), textcolor = color.new(cBull, 15), size = size.small))
+    array.push(lbs, label.new(xR, valLvl, "VAL " + fmtPrice(valLvl), style = label.style_label_left, color = color.new(cBg, 100), textcolor = color.new(cBear, 15), size = size.small))
+
+    if embedMode == "Profile" or embedMode == "Both"
+        int x0 = bar_index + profOff
+        for j = i0 to i1
+            float lvj = array.get(lv, j)
+            float hh = rowStep * 0.42
+            float wp = array.get(lf, j) / maxTot * profW
+            float wc = array.get(rg, j) / maxTot * profW
+            bool isP = j == pocI
+            if wp > 0.05
+                array.push(bxs, box.new(x0, lvj + hh, x0 + int(math.max(1, math.round(wp))), lvj - hh, border_color = na, bgcolor = isP ? color.new(cGold, 25) : color.new(cBear, 40)))
+            if wc > 0.05
+                int xs = x0 + int(math.max(1, math.round(wp)))
+                array.push(bxs, box.new(xs, lvj + hh, xs + int(math.max(1, math.round(wc))), lvj - hh, border_color = na, bgcolor = isP ? color.new(cGold, 25) : color.new(cBull, 40)))
+
+    // ---- VA / POC signals (levels applied to history like the original)
+    for s in sigLabs
+        label.delete(s)
+    array.clear(sigLabs)
+    string whyLast = ""
+    if showVAsig and bar_index >= 1
+        int lbsN = math.min(sigBars, bar_index)
+        int kStart = (intrabarOn or barstate.isconfirmed) ? 0 : 1
+        int lastSigI = -999
+        int prevAbv = 0
+        int prevIn = 0
+        for k = lbsN - 1 to kStart
+            int idx = lbsN - 1 - k
+            float px = close[k]
+            bool inside = px >= valLvl and px <= vahLvl
+            int insI = inside ? 1 : 2
+            int abv = px > pocLvl ? 1 : -1
+            bool distOk = idx - lastSigI >= minDist
+            int dir = 0
+            string why = ""
+            if prevAbv != 0 and prevAbv != abv and distOk
+                dir := abv
+                why := abv == 1 ? "POC↑" : "POC↓"
+            else if prevIn != 0 and prevIn != insI and distOk
+                if not inside
+                    dir := px > vahLvl ? 1 : -1
+                    why := px > vahLvl ? "VA+BRK" : "VA-BRK"
+                else
+                    dir := px > pocLvl ? 1 : -1
+                    why := "VA-REJ"
+            if dir == 0 and k == 0 and idx > lastSigI + minDist
+                if pcrVal > pcrHi
+                    dir := -1
+                    why := "FLOW-S"
+                else if pcrVal < pcrLo
+                    dir := 1
+                    why := "FLOW-L"
+            if dir != 0
+                lastSigI := idx
+                bool live = k == 0 and intrabarOn and not barstate.isconfirmed
+                color sc = live ? cWarn : dir == 1 ? cBull : cBear
+                array.push(sigLabs, label.new(bar_index - k, dir == 1 ? low[k] : high[k], why, style = dir == 1 ? label.style_label_up : label.style_label_down, color = color.new(sc, 15), textcolor = color.white, size = size.tiny))
+                if k == 0
+                    whyLast := why
+            prevAbv := abv
+            prevIn := insI
+    sigWhyLast := whyLast
+
+    // ---- dashboard
+    if showTable
+        color pcrCol = pcrVal > 1.15 ? cBear : pcrVal < 0.85 ? cBull : cTxt
+        color biasCol = biasVal >= 0 ? cBull : cBear
+        string sessLbl = session.ismarket ? (barstate.isrealtime ? "LIVE" : "LAST CLOSE") : "CLOSED"
+        float putPct = (leftTot + rightTot) > 0 ? leftTot / (leftTot + rightTot) * 100.0 : 50.0
+
+        tc(0, 0, "◇ OPTIONS LADDER PRO", cA1, color.new(cA1, 78), text.align_center)
+        tc(0, 1, "SRC  " + srcTxt, cA1, color.new(cA1, 88), text.align_left)
+        tc(1, 1, "PCR  " + str.tostring(pcrVal, "0.00"), pcrCol, color.new(pcrCol, 86), text.align_center)
+        tc(2, 1, "RES  " + (srcEff == "SLF" ? str.tostring(slfBars) : str.tostring(synBars)) + "b", cA1, color.new(cA1, 88), text.align_right)
+        tc(0, 2, "POC  " + fmtPrice(pocLvl), cGold, color.new(cGold, 70), text.align_left)
+        tc(1, 2, "VAH  " + fmtPrice(vahLvl), cBull, color.new(cBull, 86), text.align_center)
+        tc(2, 2, "VAL  " + fmtPrice(valLvl), cBear, color.new(cBear, 70), text.align_right)
+        tc(0, 3, "BIAS  " + (biasVal >= 0 ? "+" : "") + str.tostring(biasVal * 100.0, "0.0") + "%", biasCol, color.new(biasCol, 88), text.align_left)
+        tc(1, 3, "EXP  " + str.tostring(numExp), cA1, color.new(cA1, 92), text.align_center)
+        tc(2, 3, sessLbl, session.ismarket ? cBull : cDim, session.ismarket ? color.new(cBull, 88) : color.new(cBg, 100), text.align_right)
+        tc(0, 4, "PUTS " + str.tostring(putPct, "0") + "%   FIELD   " + str.tostring(100.0 - putPct, "0") + "% CALLS", cTxt, color.new(color.from_gradient(putPct, 0, 100, cBull, cBear), 70), text.align_center)
+
+        int scanIdx = scanMode == "Off" ? -1 : int((timenow / 1000.0 * (scanMode == "Fast" ? 3.0 : 0.7)) % dispN)
+        for ri = 0 to rowsIn - 1
+            int rr = 5 + ri
+            if ri < dispN
+                int j = i1 - ri
+                float lvj = array.get(lv, j)
+                float lv_ = array.get(lf, j)
+                float rv_ = array.get(rg, j)
+                float ln = lv_ / leftRef
+                float rn = rv_ / rightRef
+                bool isP = j == pocI
+                bool isVh = j == vaHi
+                bool isVl = j == vaLo
+                bool isAtm = j == curI
+                bool isScan = ri == scanIdx
+                float vt = dispN > 1 ? ri / (dispN - 1.0) : 0.5
+                color atmo = color.from_gradient(vt * 100.0, 0, 100, cBear, cBull)
+                color lc = isP ? cGold : ln > 0.82 ? putHot : ln > 0.35 ? color.from_gradient(18, 0, 100, cBear, atmo) : color.from_gradient(28, 0, 100, cBear, cDim)
+                color rc2 = isP ? cGold : rn > 0.82 ? callHot : rn > 0.35 ? color.from_gradient(18, 0, 100, cBull, atmo) : color.from_gradient(28, 0, 100, cBull, cDim)
+                string tag = isP ? " POC" : isAtm ? " ATM" : isVh ? " VAH" : isVl ? " VAL" : ""
+                color mc = isP ? cGold : isAtm ? cA1 : isVh ? cBull : isVl ? cBear : isScan ? cWarn : cTxt
+                color rb = isP ? color.new(cGold, 75) : isVh ? color.new(cBull, 90) : isVl ? color.new(cBear, 90) : isAtm ? color.new(cA1, 90) : color.new(cBg, 100)
+                if isScan
+                    rb := color.new(cWarn, 78)
+                tc(0, rr, fmtOI(lv_) + " " + barL(ln, 8), lc, rb, text.align_right)
+                tc(1, rr, (isScan ? "›" : "") + fmtPrice(lvj) + tag, mc, rb, text.align_center)
+                tc(2, rr, barR(rn, 8) + " " + fmtOI(rv_), rc2, rb, text.align_left)
+            else
+                tc(0, rr, "", cTxt, color.new(cBg, 100))
+                tc(1, rr, "", cTxt, color.new(cBg, 100))
+                tc(2, rr, "", cTxt, color.new(cBg, 100))
+
+        tc(0, baseR, leftName + "  " + fmtOI(leftTot), cBear, color.new(cBear, 90), text.align_left)
+        tc(1, baseR, "Σ " + fmtOI(leftTot + rightTot), cGold, color.new(cGold, 90), text.align_center)
+        tc(2, baseR, fmtOI(rightTot) + "  " + rightName, cBull, color.new(cBull, 90), text.align_right)
+        tc(0, baseR + 1, "COG  " + fmtPrice(cog), cTxt, color.new(cBg, 100), text.align_left)
+        tc(1, baseR + 1, "H  " + str.tostring(hNorm, "0.00"), cA1, color.new(cBg, 100), text.align_center)
+        tc(2, baseR + 1, "ΔATR  " + str.tostring((cog - spot) / atrV, "0.00"), cDim, color.new(cBg, 100), text.align_right)
+        tc(0, baseR + 2, (whyLast != "" ? "SIG  " + whyLast : "SIG  " + lastSigType) + "  ·  " + sessLbl, session.ismarket ? cBull : cDim, session.ismarket ? color.new(cBull, 90) : color.new(cBg, 100), text.align_center)
+        tc(0, baseR + 3, noteTxt, cDim, color.new(cBg, 100), text.align_center, size.tiny)
+
+        // Mass Split zones (ABV / UVA / POC / LVA / BLW)
+        bool splitOn = embedMode == "Split" or embedMode == "Both"
+        if splitOn
+            array<float> bT = array.new<float>(5, 0.0)
+            array<float> bR = array.new<float>(5, 0.0)
+            for j = i0 to i1
+                int bi = classify(array.get(lv, j), j == pocI, pocLvl, vahLvl, valLvl)
+                array.set(bT, bi, array.get(bT, bi) + array.get(tot, j))
+                array.set(bR, bi, array.get(bR, bi) + array.get(rg, j))
+            float allB = array.sum(bT)
+            float maxB = math.max(array.max(bT), 1e-10)
+            tc(0, baseR + 4, "◈  MASS SPLIT", cA1, color.new(cA1, 88), text.align_center)
+            array<string> keys = array.from("ABV  ABOVE VAH", "UVA  POC→VAH", "POC  MAGNET", "LVA  VAL→POC", "BLW  BELOW VAL")
+            for w = 0 to 4
+                float bt = array.get(bT, w)
+                float pct = allB > 0 ? bt / allB * 100.0 : 0.0
+                float sm = bt > 0 ? array.get(bR, w) / bt : 0.5
+                color zc = w == 2 ? cGold : sm < 0.5 ? color.from_gradient(sm, 0.0, 0.5, cBear, cMid) : color.from_gradient(sm, 0.5, 1.0, cMid, cBull)
+                tc(0, baseR + 5 + w, array.get(keys, w), zc, color.new(zc, 90), text.align_left)
+                tc(1, baseR + 5 + w, str.tostring(pct, "0") + "%", zc, color.new(zc, 90), text.align_center)
+                tc(2, baseR + 5 + w, barR(bt / maxB, 10) + " C" + str.tostring(sm * 100.0, "0"), zc, color.new(zc, 90), text.align_left)
+            tc(0, baseR + 10, "bar = OI mass · C = call share · PCR " + str.tostring(pcrVal, "0.00"), cDim, color.new(cBg, 100), text.align_center, size.tiny)
+        else
+            for rr2 = baseR + 4 to baseR + 10
+                for cc = 0 to 2
+                    tc(cc, rr2, "", cTxt, color.new(cBg, 100))
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+bool pocUp = not na(pocLvl) and close > pocLvl and close[1] <= pocLvl
+bool pocDn = not na(pocLvl) and close < pocLvl and close[1] >= pocLvl
+bool vahBrk = not na(vahLvl) and close > vahLvl and close[1] <= vahLvl
+bool valBrk = not na(valLvl) and close < valLvl and close[1] >= valLvl
+alertcondition(pocUp or vahBrk, "Options Ladder Pro: VA/POC Long", "OLP VA/POC Long (POC cross up or VAH breakout)")
+alertcondition(pocDn or valBrk, "Options Ladder Pro: VA/POC Short", "OLP VA/POC Short (POC cross down or VAL breakdown)")
+alertcondition(valleyConf, "Options Ladder Pro: Valley Long", "OLP Valley Long")
+alertcondition(peakConf, "Options Ladder Pro: Peak Short", "OLP Peak Short")
